@@ -15,9 +15,9 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 # ---------------------------------------------------------
 # 設定・定数
 # ---------------------------------------------------------
+# Googleスプレッドシートの設定
+JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ポケカ在庫管理DB'
-# ローカル用鍵ファイル名
-LOCAL_KEY_FILE = 'secrets.json'
 
 # エキスパンションリスト (完全版)
 EXPANSION_LIST = {
@@ -162,28 +162,35 @@ EXPANSION_LIST = {
 }
 
 # ---------------------------------------------------------
-# データ読み書き機能 (Cloud/Local両対応)
+# データ読み書き機能 (Cloud/Local両対応・柔軟版)
 # ---------------------------------------------------------
 @st.cache_resource
 def get_gspread_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     try:
-        # 1. Cloud上のSecretsを確認
+        # 【修正】Secretsの読み込み方を柔軟にしました
+        # パターン1: [gcp_service_account] というヘッダーがある場合
         if "gcp_service_account" in st.secrets:
-            # Cloud用の設定 (st.secretsから読み込む)
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
-        # 2. ローカルファイルを確認
-        elif os.path.exists(LOCAL_KEY_FILE):
-            # Local用の設定 (ファイルから読み込む)
-            creds = ServiceAccountCredentials.from_json_keyfile_name(LOCAL_KEY_FILE, scope)
+            key_dict = st.secrets["gcp_service_account"]
+        # パターン2: ヘッダーがなく、直下に private_key などがある場合
+        elif "private_key" in st.secrets:
+            key_dict = st.secrets
+        # パターン3: ローカル環境 (PC) の secrets.json を探す
+        elif os.path.exists(JSON_KEY_FILE):
+            creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_KEY_FILE, scope)
+            return gspread.authorize(creds)
         else:
-            st.error("認証キーが見つかりません (secrets.json も st.secrets もありません)")
+            st.error("認証キーが見つかりません。")
+            st.info("Streamlit Community CloudのSettings > Secrets に認証情報を貼り付けてください。")
             return None
-            
+
+        # Cloud用の認証作成
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
         client = gspread.authorize(creds)
         return client
+
     except Exception as e:
-        st.error(f"認証エラー: {e}")
+        st.error(f"認証エラーが発生しました。\n詳細: {e}")
         return None
 
 def get_sheet():
@@ -194,13 +201,17 @@ def get_sheet():
             return sheet
         except gspread.exceptions.SpreadsheetNotFound:
             st.error(f"スプレッドシート「{SPREADSHEET_NAME}」が見つかりません。")
+            st.info("1. Googleスプレッドシートを作成しましたか？\n2. シート名を正確に「ポケカ在庫管理DB」にしましたか？\n3. secrets.jsonのメールアドレスを「編集者」として招待しましたか？")
             return None
     return None
 
 def load_data():
     sheet = get_sheet()
     if sheet:
+        # gspread_dataframeを使ってデータフレームとして取得
         df = get_as_dataframe(sheet, evaluate_formulas=True)
+        
+        # 空行を削除
         df = df.dropna(subset=['ID'])
         df = df[df['ID'] != '']
         
@@ -215,7 +226,7 @@ def load_data():
         for col in str_cols:
             df[col] = df[col].astype(str).replace('nan', '').replace('None', '')
             if col == 'PSA番号':
-                df[col] = df[col].apply(lambda x: x.split('.')[0] if '.' in x else x)
+                df[col] = df[col].apply(lambda x: x.replace(".0", "") if x.endswith(".0") else x)
 
         num_cols = ['仕入れ値', '想定売値', '参考販売', '参考買取']
         for col in num_cols:
@@ -239,7 +250,6 @@ def save_data(df):
             if col not in df_to_save.columns:
                 df_to_save[col] = ""
         
-        # 保存時も型を統一
         for col in ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', '保管場所', 'ステータス', 'PSA番号']:
             df_to_save[col] = df_to_save[col].astype(str).replace('nan', '')
 
@@ -321,19 +331,24 @@ if menu == "📦 在庫登録":
 
     st.divider()
 
-    initial_name, initial_sales = "", 0
+    initial_name = ""
+    initial_sales = 0
     default_category = "シングルカード" if reg_mode == "🃏 シングルカード" else "未開封BOX"
     default_condition = "A (美品)" if reg_mode == "🃏 シングルカード" else "未開封(シュリンク付)"
     
     if st.session_state['search_result']:
         res = st.session_state['search_result']
         if res['found']:
-            initial_name, initial_sales = res['name'], res['price']
-            st.success(f"ヒット: {initial_name}"); st.info(f"🛒 現在の販売相場: ¥{initial_sales:,}")
-        else: st.warning("自動取得できませんでした。手動で入力してください。")
+            initial_name = res['name']
+            initial_sales = res['price']
+            st.success(f"ヒット: {initial_name}")
+            st.info(f"🛒 現在の販売相場: ¥{initial_sales:,}")
+        else:
+            st.warning("自動取得できませんでした。手動で入力してください。")
     
     with st.form("register_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
+        
         with col1:
             name = st.text_input("商品名", value=initial_name)
             default_model = ""
@@ -392,16 +407,11 @@ elif menu == "📊 在庫一覧・編集":
 
         def make_rush_media_url(name):
             if pd.notna(name) and str(name).strip() != "":
-                clean_name = re.sub(r'【.*?】', '', str(name))
-                clean_name = re.sub(r'\[.*?\]', '', clean_name)
-                clean_name = re.sub(r'\(.*?\)', '', clean_name)
-                clean_name = re.sub(r'\{.*?\}', '', clean_name)
+                clean_name = re.sub(r'【.*?】', '', str(name)).replace('[', '').replace(']', '').replace('(', '').replace(')', '')
                 clean_name = re.sub(r'[A-Za-z0-9]+-[A-Za-z0-9]+', '', clean_name)
-                clean_name = re.sub(r'[0-9]{3}/[0-9]{3}', '', clean_name)
-                clean_name = clean_name.strip()
+                clean_name = re.sub(r'[0-9]{3}/[0-9]{3}', '', clean_name).strip()
                 if clean_name:
-                    encoded_name = quote(clean_name)
-                    return f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={encoded_name}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
+                    return f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={quote(clean_name)}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
             return None
         df_display["RushMediaリンク"] = df_display["商品名"].apply(make_rush_media_url)
 
