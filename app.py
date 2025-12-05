@@ -168,23 +168,17 @@ EXPANSION_LIST = {
 def get_gspread_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     try:
-        # 【修正】Secretsの読み込み方を柔軟にしました
-        # パターン1: [gcp_service_account] というヘッダーがある場合
         if "gcp_service_account" in st.secrets:
             key_dict = st.secrets["gcp_service_account"]
-        # パターン2: ヘッダーがなく、直下に private_key などがある場合
         elif "private_key" in st.secrets:
             key_dict = st.secrets
-        # パターン3: ローカル環境 (PC) の secrets.json を探す
         elif os.path.exists(JSON_KEY_FILE):
             creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_KEY_FILE, scope)
             return gspread.authorize(creds)
         else:
             st.error("認証キーが見つかりません。")
-            st.info("Streamlit Community CloudのSettings > Secrets に認証情報を貼り付けてください。")
             return None
 
-        # Cloud用の認証作成
         creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
         client = gspread.authorize(creds)
         return client
@@ -201,17 +195,13 @@ def get_sheet():
             return sheet
         except gspread.exceptions.SpreadsheetNotFound:
             st.error(f"スプレッドシート「{SPREADSHEET_NAME}」が見つかりません。")
-            st.info("1. Googleスプレッドシートを作成しましたか？\n2. シート名を正確に「ポケカ在庫管理DB」にしましたか？\n3. secrets.jsonのメールアドレスを「編集者」として招待しましたか？")
             return None
     return None
 
 def load_data():
     sheet = get_sheet()
     if sheet:
-        # gspread_dataframeを使ってデータフレームとして取得
         df = get_as_dataframe(sheet, evaluate_formulas=True)
-        
-        # 空行を削除
         df = df.dropna(subset=['ID'])
         df = df[df['ID'] != '']
         
@@ -221,7 +211,6 @@ def load_data():
             if col not in df.columns:
                 df[col] = ""
 
-        # 型変換
         str_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', '保管場所', 'ステータス', 'PSA番号']
         for col in str_cols:
             df[col] = df[col].astype(str).replace('nan', '').replace('None', '')
@@ -405,14 +394,20 @@ elif menu == "📊 在庫一覧・編集":
             return None
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
+        # 【修正】不要な文字を強力に削除して検索精度を向上
         def make_rush_media_url(name):
             if pd.notna(name) and str(name).strip() != "":
-                clean_name = re.sub(r'【.*?】', '', str(name)).replace('[', '').replace(']', '').replace('(', '').replace(')', '')
-                clean_name = re.sub(r'[A-Za-z0-9]+-[A-Za-z0-9]+', '', clean_name)
-                clean_name = re.sub(r'[0-9]{3}/[0-9]{3}', '', clean_name).strip()
+                # 1. 括弧とその中身を丸ごと削除 ( 【SR】, {105/078}, [SV1V] など )
+                clean_name = re.sub(r'[【\[\(\{（].*?[】\]\)\}）]', '', str(name))
+                # 2. 型番や分数表記っぽい英数字記号を削除 ( SV1V-100, 100/078 )
+                clean_name = re.sub(r'[A-Za-z0-9]+[-/][A-Za-z0-9]+', '', clean_name)
+                # 3. 連続するスペースを1つにし、前後の空白を削除
+                clean_name = re.sub(r'\s+', ' ', clean_name).strip()
+
                 if clean_name:
                     return f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={quote(clean_name)}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
             return None
+            
         df_display["RushMediaリンク"] = df_display["商品名"].apply(make_rush_media_url)
 
         edited_df = st.data_editor(
@@ -499,5 +494,3 @@ elif menu == "💰 収支分析":
             chart_data = stock_df['種類'].value_counts()
             st.dataframe(chart_data, use_container_width=True)
     else: st.info("データがありません。")
-
-# --- コードはここで終了です ---
