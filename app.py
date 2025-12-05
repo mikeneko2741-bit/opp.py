@@ -286,92 +286,96 @@ menu = st.sidebar.radio("メニュー", ["📦 在庫登録", "📊 在庫一覧
 # ==========================================
 if menu == "📦 在庫登録":
     st.header("新規在庫の登録")
-    reg_mode = st.radio("登録モード", ["🃏 シングルカード", "📦 未開封BOX"], horizontal=True)
-    st.subheader("① 商品検索 (販売価格)")
-    col_search1, col_search2, col_search3 = st.columns([2, 1, 1])
     
-    with col_search1:
-        selected_exp_name = st.selectbox("エキスパンション", list(EXPANSION_LIST.keys()), index=1)
-        expansion_code = EXPANSION_LIST[selected_exp_name]
-    with col_search2:
-        if reg_mode == "🃏 シングルカード": card_number = st.text_input("カード番号", placeholder="例: 100")
-        else: st.info("BOX名で検索します"); card_number = "" 
-    
-    if 'search_result' not in st.session_state: st.session_state['search_result'] = None
-
-    with col_search3:
-        st.write("") 
-        st.write("")
-        if st.button("🔍 情報を取得"):
-            search_keyword = ""
-            if reg_mode == "🃏 シングルカード":
-                if expansion_code and card_number: search_keyword = f"{expansion_code} {card_number}"
-                else: st.warning("パックと番号を入力してください")
-            else:
-                if selected_exp_name and selected_exp_name != "選択してください":
-                    exp_name_only = selected_exp_name.split("(")[0].strip()
-                    search_keyword = f"{exp_name_only} BOX"
-                else: st.warning("エキスパンションを選択してください")
-            if search_keyword:
-                with st.spinner('カードラッシュから情報を取得中...'):
-                    result = search_card_rush(search_keyword)
-                    st.session_state['search_result'] = result
-                    if not result['found']: st.error("見つかりませんでした。")
-
-    st.divider()
-
-    initial_name = ""
-    initial_sales = 0
-    default_category = "シングルカード" if reg_mode == "🃏 シングルカード" else "未開封BOX"
-    default_condition = "A (美品)" if reg_mode == "🃏 シングルカード" else "未開封(シュリンク付)"
-    
-    if st.session_state['search_result']:
-        res = st.session_state['search_result']
-        if res['found']:
-            initial_name = res['name']
-            initial_sales = res['price']
-            st.success(f"ヒット: {initial_name}")
-            st.info(f"🛒 現在の販売相場: ¥{initial_sales:,}")
-        else:
-            st.warning("自動取得できませんでした。手動で入力してください。")
-    
-    with st.form("register_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
+    # 【修正】スマホ用に「折りたたみ」の中にフォームを入れる
+    with st.expander("➕ 新規在庫を登録する (ここをタップして開閉)", expanded=True):
+        reg_mode = st.radio("登録モード", ["🃏 シングルカード", "📦 未開封BOX"], horizontal=True)
+        st.subheader("① 商品検索 (販売価格)")
+        col_search1, col_search2, col_search3 = st.columns([2, 1, 1])
         
-        with col1:
-            name = st.text_input("商品名", value=initial_name)
-            default_model = ""
-            if reg_mode == "🃏 シングルカード":
-                if expansion_code and card_number: default_model = f"{expansion_code}-{card_number}"
-            else:
-                if expansion_code: default_model = f"{expansion_code}-BOX"
-            model_num = st.text_input("型番/管理コード", value=default_model)
-            category = st.selectbox("種類", ["シングルカード", "未開封BOX", "サプライ", "その他"], index=["シングルカード", "未開封BOX", "サプライ", "その他"].index(default_category))
-            condition = st.selectbox("状態", ["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"], index=1)
-            psa_grade = st.selectbox("PSAグレード", ["未鑑定", "10", "9", "その他"], index=0)
-            psa_num = st.text_input("PSA証明番号 (Cert #)", placeholder="例: 12345678")
-        with col2:
-            cost = st.number_input("仕入れ値 (円)", min_value=0, step=100)
-            c_p1, c_p2 = st.columns(2)
-            with c_p1: ref_sales = st.number_input("参考販売価格 (円)", value=initial_sales, step=100)
-            with c_p2: ref_buyback = st.number_input("参考買取価格 (手動)", value=0, step=100)
-            target_price = st.number_input("想定売値 (円)", value=initial_sales, step=100)
-            location = st.text_input("保管場所", placeholder="例：防湿庫A")
+        with col_search1:
+            selected_exp_name = st.selectbox("エキスパンション", list(EXPANSION_LIST.keys()), index=1)
+            expansion_code = EXPANSION_LIST[selected_exp_name]
+        with col_search2:
+            if reg_mode == "🃏 シングルカード": card_number = st.text_input("カード番号", placeholder="例: 100")
+            else: st.info("BOX名で検索します"); card_number = "" 
         
-        submitted = st.form_submit_button("登録する")
-        if submitted and name:
-            new_data = pd.DataFrame({
-                'ID': [str(uuid.uuid4())[:8]], '商品名': [name], '型番': [model_num],
-                '種類': [category], '状態': [condition], 'PSAグレード': [psa_grade],
-                '仕入れ日': [datetime.now().strftime('%Y-%m-%d')],
-                '仕入れ値': [cost], '想定売値': [target_price], '参考販売': [ref_sales], '参考買取': [ref_buyback], 
-                '保管場所': [location], 'ステータス': ['在庫あり'], 'PSA番号': [str(psa_num)]
-            })
-            if not df.empty: df = pd.concat([df, new_data], ignore_index=True)
-            else: df = new_data
-            save_data(df)
-            st.session_state['search_result'] = None
-            st.success(f"「{name}」を登録しました！")
+        if 'search_result' not in st.session_state: st.session_state['search_result'] = None
+
+        with col_search3:
+            st.write("") 
+            st.write("")
+            # スマホで押しやすいように full_width を設定
+            if st.button("🔍 情報を取得", use_container_width=True):
+                search_keyword = ""
+                if reg_mode == "🃏 シングルカード":
+                    if expansion_code and card_number: search_keyword = f"{expansion_code} {card_number}"
+                    else: st.warning("パックと番号を入力してください")
+                else:
+                    if selected_exp_name and selected_exp_name != "選択してください":
+                        exp_name_only = selected_exp_name.split("(")[0].strip()
+                        search_keyword = f"{exp_name_only} BOX"
+                    else: st.warning("エキスパンションを選択してください")
+                if search_keyword:
+                    with st.spinner('カードラッシュから情報を取得中...'):
+                        result = search_card_rush(search_keyword)
+                        st.session_state['search_result'] = result
+                        if not result['found']: st.error("見つかりませんでした。")
+
+        st.divider()
+
+        initial_name = ""
+        initial_sales = 0
+        default_category = "シングルカード" if reg_mode == "🃏 シングルカード" else "未開封BOX"
+        default_condition = "A (美品)" if reg_mode == "🃏 シングルカード" else "未開封(シュリンク付)"
+        
+        if st.session_state['search_result']:
+            res = st.session_state['search_result']
+            if res['found']:
+                initial_name = res['name']
+                initial_sales = res['price']
+                st.success(f"ヒット: {initial_name}")
+                st.info(f"🛒 現在の販売相場: ¥{initial_sales:,}")
+            else:
+                st.warning("自動取得できませんでした。手動で入力してください。")
+        
+        with st.form("register_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                name = st.text_input("商品名", value=initial_name)
+                default_model = ""
+                if reg_mode == "🃏 シングルカード":
+                    if expansion_code and card_number: default_model = f"{expansion_code}-{card_number}"
+                else:
+                    if expansion_code: default_model = f"{expansion_code}-BOX"
+                model_num = st.text_input("型番/管理コード", value=default_model)
+                category = st.selectbox("種類", ["シングルカード", "未開封BOX", "サプライ", "その他"], index=["シングルカード", "未開封BOX", "サプライ", "その他"].index(default_category))
+                condition = st.selectbox("状態", ["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"], index=1)
+                psa_grade = st.selectbox("PSAグレード", ["未鑑定", "10", "9", "その他"], index=0)
+                psa_num = st.text_input("PSA証明番号 (Cert #)", placeholder="例: 12345678")
+            with col2:
+                cost = st.number_input("仕入れ値 (円)", min_value=0, step=100)
+                c_p1, c_p2 = st.columns(2)
+                with c_p1: ref_sales = st.number_input("参考販売価格 (円)", value=initial_sales, step=100)
+                with c_p2: ref_buyback = st.number_input("参考買取価格 (手動)", value=0, step=100)
+                target_price = st.number_input("想定売値 (円)", value=initial_sales, step=100)
+                location = st.text_input("保管場所", placeholder="例：防湿庫A")
+            
+            submitted = st.form_submit_button("登録する", use_container_width=True)
+            if submitted and name:
+                new_data = pd.DataFrame({
+                    'ID': [str(uuid.uuid4())[:8]], '商品名': [name], '型番': [model_num],
+                    '種類': [category], '状態': [condition], 'PSAグレード': [psa_grade],
+                    '仕入れ日': [datetime.now().strftime('%Y-%m-%d')],
+                    '仕入れ値': [cost], '想定売値': [target_price], '参考販売': [ref_sales], '参考買取': [ref_buyback], 
+                    '保管場所': [location], 'ステータス': ['在庫あり'], 'PSA番号': [str(psa_num)]
+                })
+                if not df.empty: df = pd.concat([df, new_data], ignore_index=True)
+                else: df = new_data
+                save_data(df)
+                st.session_state['search_result'] = None
+                st.success(f"「{name}」を登録しました！")
 
 # ==========================================
 # 2. 在庫一覧・編集画面
@@ -379,6 +383,9 @@ if menu == "📦 在庫登録":
 elif menu == "📊 在庫一覧・編集":
     st.header("在庫リスト")
     if not df.empty:
+        # 【修正】スマホ用に表示列を絞るトグルスイッチ
+        is_mobile_view = st.toggle("📱 スマホモード（列を絞る）", value=False)
+        
         search_query = st.text_input("🔍 在庫を検索", placeholder="商品名、PSA番号、型番などで検索...")
         if search_query:
             mask = df.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
@@ -394,49 +401,57 @@ elif menu == "📊 在庫一覧・編集":
             return None
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
-        # 【修正】不要な文字を強力に削除して検索精度を向上
         def make_rush_media_url(name):
             if pd.notna(name) and str(name).strip() != "":
-                # 1. 括弧とその中身を丸ごと削除 ( 【SR】, {105/078}, [SV1V] など )
                 clean_name = re.sub(r'[【\[\(\{（].*?[】\]\)\}）]', '', str(name))
-                # 2. 型番や分数表記っぽい英数字記号を削除 ( SV1V-100, 100/078 )
                 clean_name = re.sub(r'[A-Za-z0-9]+[-/][A-Za-z0-9]+', '', clean_name)
-                # 3. 連続するスペースを1つにし、前後の空白を削除
                 clean_name = re.sub(r'\s+', ' ', clean_name).strip()
-
                 if clean_name:
                     return f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={quote(clean_name)}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
             return None
-            
         df_display["RushMediaリンク"] = df_display["商品名"].apply(make_rush_media_url)
+
+        # 全カラムの設定
+        all_column_config = {
+            "削除": st.column_config.CheckboxColumn("削除", default=False),
+            "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
+            "想定売値": st.column_config.NumberColumn(format="¥%d"),
+            "参考販売": st.column_config.NumberColumn(format="¥%d"),
+            "参考買取": st.column_config.NumberColumn(format="¥%d"),
+            "PSA番号": st.column_config.TextColumn(help="8桁の証明番号"),
+            "PSAリンク": st.column_config.LinkColumn("PSA確認", display_text="証明書"),
+            "RushMediaリンク": st.column_config.LinkColumn("ラッシュメディア", display_text="買取相場"),
+            "ステータス": st.column_config.SelectboxColumn(options=["在庫あり", "出品中", "売却済み", "PSA提出中"], required=True)
+        }
+
+        # 【修正】スマホモード時は表示する列を限定する
+        if is_mobile_view:
+            # 必要なカラムだけ抽出（IDは編集機能のために必須だが隠すことは難しいので表示、他は重要度順）
+            target_cols = ["削除", "商品名", "ステータス", "想定売値", "RushMediaリンク", "PSAリンク", "ID"]
+            # 存在しないカラムを除外してフィルタリング
+            df_display = df_display[[c for c in target_cols if c in df_display.columns]]
+            st.info("💡 スマホモード: 重要な列のみ表示しています。詳細編集はスイッチをOFFにしてください。")
 
         edited_df = st.data_editor(
             df_display, num_rows="dynamic",
-            column_config={
-                "削除": st.column_config.CheckboxColumn("削除", default=False),
-                "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
-                "想定売値": st.column_config.NumberColumn(format="¥%d"),
-                "参考販売": st.column_config.NumberColumn(format="¥%d"),
-                "参考買取": st.column_config.NumberColumn(format="¥%d"),
-                "PSA番号": st.column_config.TextColumn(help="8桁の証明番号"),
-                "PSAリンク": st.column_config.LinkColumn("PSA確認", display_text="証明書を見る"),
-                "RushMediaリンク": st.column_config.LinkColumn("ラッシュメディア", display_text="買取相場"),
-                "ステータス": st.column_config.SelectboxColumn(options=["在庫あり", "出品中", "売却済み", "PSA提出中"], required=True)
-            }, hide_index=True, key="inventory_editor"
+            column_config=all_column_config,
+            hide_index=True, key="inventory_editor"
         )
 
         col_act1, col_act2 = st.columns([1, 1])
         with col_act1:
-            if st.button("🗑️ チェックした項目を削除"):
-                ids_to_delete = edited_df[edited_df['削除']]['ID'].tolist()
-                if ids_to_delete:
-                    df_new = df[~df['ID'].isin(ids_to_delete)]
-                    save_data(df_new)
-                    st.success(f"{len(ids_to_delete)} 件削除しました。")
-                    st.rerun()
-                else: st.info("削除チェックがありません。")
+            if st.button("🗑️ チェックした項目を削除", use_container_width=True):
+                # 削除処理（カラムが減っていてもIDさえあれば削除可能）
+                if '削除' in edited_df.columns:
+                    ids_to_delete = edited_df[edited_df['削除']]['ID'].tolist()
+                    if ids_to_delete:
+                        df_new = df[~df['ID'].isin(ids_to_delete)]
+                        save_data(df_new)
+                        st.success(f"{len(ids_to_delete)} 件削除しました。")
+                        st.rerun()
+                    else: st.info("削除チェックがありません。")
         with col_act2:
-            if st.button("🔄 表示中の販売価格を更新"):
+            if st.button("🔄 表示中の販売価格を更新", use_container_width=True):
                 ids_to_update = df_display['ID'].tolist()
                 if not ids_to_update: st.warning("データがありません。")
                 else:
@@ -461,11 +476,14 @@ elif menu == "📊 在庫一覧・編集":
                     save_data(df)
                     txt.text("完了！"); time.sleep(1); st.rerun()
 
+        # 保存処理（スマホモードで列が減っている場合の考慮）
         cols_to_save = [c for c in edited_df.columns if c not in ['削除', 'PSAリンク', 'RushMediaリンク']]
         edited_content = edited_df[cols_to_save]
+        
         if not edited_content.empty:
             df.set_index('ID', inplace=True)
             edited_content.set_index('ID', inplace=True)
+            # updateを使うと、存在するカラムだけが更新されるので安全
             df.update(edited_content)
             df.reset_index(inplace=True)
             save_data(df)
