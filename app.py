@@ -199,18 +199,13 @@ def get_sheet():
 def load_data():
     sheet = get_sheet()
     if sheet:
-        # データを取得
         df = get_as_dataframe(sheet, evaluate_formulas=True)
-        
-        # 【重要修正】カラムチェックを行う
-        # もしデータが空っぽ、またはID列がない場合は、強制的に初期化する
         if df.empty or 'ID' not in df.columns:
             return pd.DataFrame(columns=[
                 'ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
                 '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数'
             ])
 
-        # ここまで来ればID列はあるはずなので、安全にdropnaできる
         df = df.dropna(subset=['ID'])
         df = df[df['ID'] != '']
         
@@ -317,6 +312,26 @@ def search_card_rush(keyword):
         return results_b[:50]
     else:
         return results_a[:50]
+
+# ---------------------------------------------------------
+# 便利関数：商品名の強力クリーニング
+# ---------------------------------------------------------
+def clean_product_name(text):
+    if not isinstance(text, str):
+        return str(text)
+    
+    # 1. カッコとその中身を全て削除
+    # [] {} () 【】 〔〕 など、全角半角問わず全て削除
+    text = re.sub(r'[【\[\(\{（〔].*?[】\]\)\}）〕]', '', text)
+    
+    # 2. 先頭にある「型番っぽい英数字 + ハイフン」を削除 (例: SV2a-123 )
+    # ただし商品名の一部かもしれないので、慎重に。「行頭にある英数字+記号」のみ
+    text = re.sub(r'^[A-Za-z0-9]+[-]', '', text)
+    
+    # 3. 余分なスペースを削除
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
 
 # ---------------------------------------------------------
 # アプリ画面の構築
@@ -461,9 +476,27 @@ elif menu == "📊 在庫一覧・編集":
             mask = df_display.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
             df_display = df_display[mask]
 
-        df_display.insert(0, "選択", False)
-        df_display.insert(1, "削除", False)
+        # 選択列と削除列を追加
+        if '選択' not in df_display.columns:
+            df_display.insert(0, "選択", False)
+        if '削除' not in df_display.columns:
+            df_display.insert(1, "削除", False)
         
+        # 【単一選択（ラジオボタン化）のロジック】
+        # 前回選択されていたIDをsession_stateで記憶
+        if 'last_selected_id' not in st.session_state:
+            st.session_state['last_selected_id'] = None
+
+        # 現在のデータフレーム上で、前回選択されていたID以外をすべてFalseにする処理
+        # これは画面描画の直前に行うことで、ユーザーには「切り替わった」ように見える
+        if st.session_state['last_selected_id']:
+            # 全ての「選択」をFalseにし、last_selected_idだけTrueにする...
+            # という処理をしたいが、data_editorはユーザー入力を受け付ける場所なので
+            # ここでは「初期値」としてセットする。
+            # ただしdata_editorはstateを持つので、keyを変えないとリセットされない問題がある。
+            # 今回はシンプルに、下記の「編集後の処理」で他をFalseにするアプローチをとる。
+            pass
+
         def make_psa_url(num):
             if pd.notna(num) and str(num).strip() != "":
                 clean_num = re.sub(r'[^0-9]', '', str(num))
@@ -472,7 +505,7 @@ elif menu == "📊 在庫一覧・編集":
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
         all_column_config = {
-            "選択": st.column_config.CheckboxColumn("選択", default=False, help="チェックすると詳細を表示します"),
+            "選択": st.column_config.CheckboxColumn("選択", default=False, help="詳細を表示"),
             "削除": st.column_config.CheckboxColumn("削除", default=False),
             "在庫数": st.column_config.NumberColumn("在庫数", format="%d個", min_value=0),
             "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
@@ -489,6 +522,7 @@ elif menu == "📊 在庫一覧・編集":
             df_display = df_display[[c for c in target_cols if c in df_display.columns]]
             st.info("💡 スマホモード: 重要な列のみ表示しています。")
 
+        # 編集エリア表示
         edited_df = st.data_editor(
             df_display, num_rows="dynamic",
             column_config=all_column_config,
@@ -497,18 +531,47 @@ elif menu == "📊 在庫一覧・編集":
             use_container_width=True
         )
 
-        selected_rows_df = edited_df[edited_df['選択']]
+        # 【重要】単一選択（ラジオボタン化）のバックエンド処理
+        # 編集後のデータから「選択」がTrueになっている行を探す
+        current_selected_rows = edited_df[edited_df['選択']]
         
-        if not selected_rows_df.empty:
-            selected_row = selected_rows_df.iloc[0]
+        # もし「選択」がTrueの行が複数ある、または「新しい選択」が行われた場合
+        if not current_selected_rows.empty:
+            # 選択されているIDのリストを取得
+            selected_ids = current_selected_rows['ID'].tolist()
+            
+            # 前回と違うIDが含まれていれば、それが「新しく選ばれたもの」
+            new_selection = None
+            for vid in selected_ids:
+                if vid != st.session_state['last_selected_id']:
+                    new_selection = vid
+                    break
+            
+            # 新しい選択があった場合
+            if new_selection:
+                st.session_state['last_selected_id'] = new_selection
+                # 他の行の選択を外すために、元のdfを更新してrerunする
+                # ここでの更新は「表示上のリセット」の意味合いが強い
+                # session_state経由で強制リロードさせる手もあるが、
+                # ここでは「次回描画時に1つだけ選択された状態」を作るため、
+                # ユーザーが複数チェックしても、最後の1つ以外は無視して詳細表示するロジックにする。
+                # (data_editorのチェックをプログラムから即座に外すのはStreamlitの仕様上難しいため)
+            
+            # 詳細表示に使用する行を決定（新しく選ばれたもの、なければ最初のもの）
+            target_id = new_selection if new_selection else selected_ids[0]
+            selected_row = edited_df[edited_df['ID'] == target_id].iloc[0]
+            
+            # ここで「最後に選んだもの以外」のチェックを外して保存...はデータが壊れるリスクがあるので
+            # 「詳細表示は1つだけ」に絞ることで実質的なラジオボタン体験を提供する
             
             raw_name = selected_row['商品名']
-            clean_name = re.sub(r'[【\[\(\{（].*?[】\]\)\}）]', '', str(raw_name))
-            clean_name = re.sub(r'[A-Za-z0-9]+[-/][A-Za-z0-9]+', '', clean_name)
-            clean_name = re.sub(r'\s+', ' ', clean_name).strip()
+            # 【強力クリーニング実行】
+            clean_name = clean_product_name(raw_name)
             
             st.divider()
             st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
+            # デバッグ用にクリーニング後の名前を表示（確認後不要なら削除可）
+            # st.caption(f"検索ワード: {clean_name}") 
             
             c1, c2 = st.columns(2)
             with c1:
@@ -527,6 +590,9 @@ elif menu == "📊 在庫一覧・編集":
                 st.link_button("⚫ Cloveで見る", clove_url, use_container_width=True)
             
             st.divider()
+        else:
+            # 選択が解除されたら履歴もクリア
+            st.session_state['last_selected_id'] = None
 
         col_act1, col_act2 = st.columns([1, 1])
         with col_act1:
