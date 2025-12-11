@@ -103,6 +103,7 @@ EXPANSION_LIST = {
     "禁断の光 (SM6)": "SM6",
     "ウルトラフォース (SM5+)": "SM5+",
     "ウルトラサン (SM5S)": "SM5S",
+    "ウルトラサン (SM5S)": "SM5S",
     "ウルトラムーン (SM5M)": "SM5M",
     "GXバトルブースト (SM4+)": "SM4+",
     "覚醒の勇者 (SM4S)": "SM4S",
@@ -199,27 +200,26 @@ def get_sheet():
 def load_data():
     sheet = get_sheet()
     if sheet:
-        # 1. データを取得
         try:
             df = get_as_dataframe(sheet, evaluate_formulas=True)
         except Exception:
             df = pd.DataFrame()
 
-        # 2. 必須カラムの定義
-        required_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
-                         '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数']
-
-        # 3. 【自動修復】データが空、またはID列がない（見出し破損）場合の処理
+        # 自動修復機能
         if df.empty or 'ID' not in df.columns:
-            # 正しい構造で作り直す
+            required_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
+                             '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数']
             df_fresh = pd.DataFrame(columns=required_cols)
-            # シートに書き込んで修復
-            set_with_dataframe(sheet, df_fresh)
+            # シートが空の時だけ書き込む（安全策）
+            if df.empty:
+                set_with_dataframe(sheet, df_fresh)
             return df_fresh
 
-        # 4. 通常のデータ整形
         df = df.dropna(subset=['ID'])
         df = df[df['ID'] != '']
+        
+        required_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
+                         '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数']
         
         for col in required_cols:
             if col not in df.columns:
@@ -239,7 +239,6 @@ def load_data():
 
         return df
     else:
-        # シート接続エラー時
         return pd.DataFrame(columns=['ID'])
 
 def save_data(df):
@@ -263,14 +262,12 @@ def save_data(df):
         set_with_dataframe(sheet, df_to_save)
 
 # ---------------------------------------------------------
-# スクレイピング機能（強化版）
+# スクレイピング & クリーニング
 # ---------------------------------------------------------
 def fetch_from_url(url):
     results = []
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"}
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = "utf-8"
         soup = BeautifulSoup(res.content, 'html.parser')
@@ -280,7 +277,6 @@ def fetch_from_url(url):
         for item in items:
             name_tag = item.select_one('.item_name, .goods_name, .name')
             if not name_tag: continue
-            
             name = name_tag.get_text(strip=True)
             price = 0
             price_tag = item.select_one('.figure, .price, .goods_price')
@@ -288,7 +284,6 @@ def fetch_from_url(url):
                 price_text = price_tag.get_text(strip=True).replace(',', '')
                 nums = re.findall(r'\d+', price_text)
                 if nums: price = int(nums[0])
-            
             if price > 0:
                 results.append({"name": name, "price": price})
         
@@ -298,7 +293,6 @@ def fetch_from_url(url):
             if r['name'] not in seen_names:
                 unique_results.append(r)
                 seen_names.add(r['name'])
-        
         return unique_results
     except Exception:
         return []
@@ -306,37 +300,23 @@ def fetch_from_url(url):
 def search_card_rush(keyword):
     base_url = "https://www.cardrush-pokemon.jp"
     encoded_keyword = quote(keyword.encode('utf-8'))
-    
     url_a = f"{base_url}/product-list?keyword={encoded_keyword}&num=100"
     results_a = fetch_from_url(url_a)
-    
-    if len(results_a) > 1:
-        return results_a[:50]
-        
+    if len(results_a) > 1: return results_a[:50]
     url_b = f"{base_url}/shop/shopbrand.html?search={encoded_keyword}"
     results_b = fetch_from_url(url_b)
-    
-    if len(results_b) > len(results_a):
-        return results_b[:50]
-    else:
-        return results_a[:50]
+    if len(results_b) > len(results_a): return results_b[:50]
+    else: return results_a[:50]
 
-# ---------------------------------------------------------
-# 便利関数：商品名の強力クリーニング
-# ---------------------------------------------------------
 def clean_product_name(text):
-    if not isinstance(text, str):
-        return str(text)
-    # カッコとその中身を削除
+    if not isinstance(text, str): return str(text)
     text = re.sub(r'[【\[\(\{（〔].*?[】\]\)\}）〕]', '', text)
-    # 行頭の型番を削除
     text = re.sub(r'^[A-Za-z0-9]+[-]', '', text)
-    # スペース削除
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 # ---------------------------------------------------------
-# アプリ画面の構築
+# アプリ画面
 # ---------------------------------------------------------
 st.set_page_config(page_title="ポケカ在庫管理", layout="wide")
 st.title("🎴 ポケカ在庫・収支管理システム (Cloud版)")
@@ -349,7 +329,6 @@ menu = st.sidebar.radio("メニュー", ["📦 在庫登録", "📊 在庫一覧
 # ==========================================
 if menu == "📦 在庫登録":
     st.header("新規在庫の登録")
-    
     with st.expander("➕ 新規在庫を登録する (ここをタップして開閉)", expanded=True):
         reg_mode = st.radio("登録モード", ["🃏 シングルカード", "📦 未開封BOX"], horizontal=True)
         st.subheader("① 商品検索 (販売価格)")
@@ -471,6 +450,7 @@ elif menu == "📊 在庫一覧・編集":
         
         search_query = st.text_input("🔍 在庫を検索", placeholder="商品名、PSA番号、型番などで検索...")
         
+        # フィルタリング
         df_display = df.copy()
         if selected_categories:
             df_display = df_display[df_display['種類'].isin(selected_categories)]
@@ -478,16 +458,28 @@ elif menu == "📊 在庫一覧・編集":
             mask = df_display.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
             df_display = df_display[mask]
 
-        if '選択' not in df_display.columns:
-            df_display.insert(0, "選択", False)
-        if '削除' not in df_display.columns:
-            df_display.insert(1, "削除", False)
+        # 【選択用セレクトボックスの作成】
+        # "選択"列は削除して、代わりにこのセレクトボックスを使う
+        st.write("▼ 詳細を見たい商品を選択してください")
         
-        # 【セッションによる選択管理】
-        # 前回選択していたIDを記憶
-        if 'last_checked_id' not in st.session_state:
-            st.session_state['last_checked_id'] = None
+        # セレクトボックス用に分かりやすい名前リストを作成
+        # 商品名 + ID（重複防止）の辞書を作る
+        select_options = {}
+        for idx, row in df_display.iterrows():
+            # 表示名: 商品名 [IDの一部]
+            label = f"{row['商品名']} (ID:{row['ID']})"
+            select_options[label] = row['ID']
+        
+        selected_label = st.selectbox(
+            "👉 商品を選択", 
+            options=list(select_options.keys()), 
+            index=None, 
+            placeholder="選択または入力..."
+        )
 
+        # 削除用列の追加
+        df_display.insert(0, "削除", False)
+        
         def make_psa_url(num):
             if pd.notna(num) and str(num).strip() != "":
                 clean_num = re.sub(r'[^0-9]', '', str(num))
@@ -496,7 +488,6 @@ elif menu == "📊 在庫一覧・編集":
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
         all_column_config = {
-            "選択": st.column_config.CheckboxColumn("選択", default=False, help="チェックで詳細表示"),
             "削除": st.column_config.CheckboxColumn("削除", default=False),
             "在庫数": st.column_config.NumberColumn("在庫数", format="%d個", min_value=0),
             "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
@@ -509,7 +500,7 @@ elif menu == "📊 在庫一覧・編集":
         }
 
         if is_mobile_view:
-            target_cols = ["選択", "削除", "商品名", "在庫数", "ステータス", "想定売値", "PSAリンク", "ID"]
+            target_cols = ["削除", "商品名", "在庫数", "ステータス", "想定売値", "PSAリンク", "ID"]
             df_display = df_display[[c for c in target_cols if c in df_display.columns]]
             st.info("💡 スマホモード: 重要な列のみ表示しています。")
 
@@ -522,61 +513,37 @@ elif menu == "📊 在庫一覧・編集":
             use_container_width=True
         )
 
-        # --- ここから「擬似ラジオボタン」ロジック ---
-        # 編集後のデータから「選択」がONの行を探す
-        checked_rows = edited_df[edited_df['選択']]
-        
-        # 複数チェックされている、または切り替わった場合の処理
-        if not checked_rows.empty:
-            checked_ids = checked_rows['ID'].tolist()
+        # 【詳細表示エリア】
+        if selected_label:
+            # 選択されたIDを取得
+            target_id = select_options[selected_label]
+            # 編集後のデータから対象行を取得
+            target_row = edited_df[edited_df['ID'] == target_id]
             
-            # 新しくチェックされたIDを探す（前回と違うもの）
-            new_id = None
-            for cid in checked_ids:
-                if cid != st.session_state['last_checked_id']:
-                    new_id = cid
-                    break
-            
-            # 新しいIDが見つかったら、それを正として他をOFFにする
-            target_id = new_id if new_id else checked_ids[0]
-            st.session_state['last_checked_id'] = target_id
-            
-            # もし「複数選択されている」または「選択が変わった」なら、
-            # 表示用DFを強制的に書き換えてrerunする（これで画面上のチェックが1つになる）
-            if len(checked_ids) > 1 or new_id:
-                # 注: ここでは保存(save_data)はせず、表示(session_state等)のリセットを行う
-                # ただし data_editor の state を直接いじるのは難しいため、
-                # ユーザーには「詳細表示」としてターゲットIDの情報を見せることで対応する。
-                # 完全にラジオボタン化するには data_editor の key を変える等の荒技が必要だが、
-                # 操作性を損なうため、ここでは「詳細表示はターゲットIDに従う」仕組みにする。
-                pass
-
-            # 詳細表示エリア
-            target_row = edited_df[edited_df['ID'] == target_id].iloc[0]
-            raw_name = target_row['商品名']
-            clean_name = clean_product_name(raw_name)
-            
-            st.divider()
-            st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                mercari_url = f"https://jp.mercari.com/search?keyword={quote(clean_name)}&status=on_sale"
-                st.link_button("🔴 メルカリで相場", mercari_url, use_container_width=True)
-            with c2:
-                rush_url = f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={quote(clean_name)}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
-                st.link_button("🔵 ラッシュ買取表", rush_url, use_container_width=True)
-            
-            c3, c4 = st.columns(2)
-            with c3:
-                yahoo_url = f"https://paypayfleamarket.yahoo.co.jp/search/{quote(clean_name)}?open=1"
-                st.link_button("🟡 Yahoo!フリマ", yahoo_url, use_container_width=True)
-            with c4:
-                clove_url = f"https://clove.jp/search?q={quote(clean_name)}"
-                st.link_button("⚫ Cloveで見る", clove_url, use_container_width=True)
-            st.divider()
-        else:
-            st.session_state['last_checked_id'] = None
+            if not target_row.empty:
+                row_data = target_row.iloc[0]
+                raw_name = row_data['商品名']
+                clean_name = clean_product_name(raw_name)
+                
+                st.divider()
+                st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    mercari_url = f"https://jp.mercari.com/search?keyword={quote(clean_name)}&status=on_sale"
+                    st.link_button("🔴 メルカリで相場", mercari_url, use_container_width=True)
+                with c2:
+                    rush_url = f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={quote(clean_name)}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
+                    st.link_button("🔵 ラッシュ買取表", rush_url, use_container_width=True)
+                
+                c3, c4 = st.columns(2)
+                with c3:
+                    yahoo_url = f"https://paypayfleamarket.yahoo.co.jp/search/{quote(clean_name)}?open=1"
+                    st.link_button("🟡 Yahoo!フリマ", yahoo_url, use_container_width=True)
+                with c4:
+                    clove_url = f"https://clove.jp/search?q={quote(clean_name)}"
+                    st.link_button("⚫ Cloveで見る", clove_url, use_container_width=True)
+                st.divider()
 
         col_act1, col_act2 = st.columns([1, 1])
         with col_act1:
@@ -609,8 +576,7 @@ elif menu == "📊 在庫一覧・編集":
                     save_data(df)
                     txt.text("完了！"); time.sleep(1); st.rerun()
 
-        # 編集保存（選択や削除カラムは保存しない）
-        cols_to_save = [c for c in edited_df.columns if c not in ['選択', '削除', 'PSAリンク']]
+        cols_to_save = [c for c in edited_df.columns if c not in ['削除', 'PSAリンク']]
         edited_content = edited_df[cols_to_save]
         
         if not edited_content.empty:
