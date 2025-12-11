@@ -205,8 +205,9 @@ def load_data():
         df = df.dropna(subset=['ID'])
         df = df[df['ID'] != '']
         
+        # 【追加】在庫数カラムを追加
         required_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
-                         '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号']
+                         '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数']
         for col in required_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -221,18 +222,22 @@ def load_data():
         for col in num_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
+        # 【追加】在庫数は数値に変換し、空白なら1にする
+        df['在庫数'] = pd.to_numeric(df['在庫数'], errors='coerce').fillna(1).astype(int)
+
         return df
     else:
         return pd.DataFrame(columns=[
             'ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
-            '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号'
+            '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数'
         ])
 
 def save_data(df):
     sheet = get_sheet()
     if sheet:
+        # 【追加】保存対象に在庫数を含める
         save_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
-                     '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号']
+                     '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数']
         
         df_to_save = df.copy()
         for col in save_cols:
@@ -241,6 +246,9 @@ def save_data(df):
         
         for col in ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', '保管場所', 'ステータス', 'PSA番号']:
             df_to_save[col] = df_to_save[col].astype(str).replace('nan', '')
+        
+        # 在庫数を保存用に調整
+        df_to_save['在庫数'] = df_to_save['在庫数'].fillna(1).astype(int)
 
         df_to_save = df_to_save[save_cols]
         sheet.clear()
@@ -287,7 +295,6 @@ menu = st.sidebar.radio("メニュー", ["📦 在庫登録", "📊 在庫一覧
 if menu == "📦 在庫登録":
     st.header("新規在庫の登録")
     
-    # 【修正】スマホ用に「折りたたみ」の中にフォームを入れる
     with st.expander("➕ 新規在庫を登録する (ここをタップして開閉)", expanded=True):
         reg_mode = st.radio("登録モード", ["🃏 シングルカード", "📦 未開封BOX"], horizontal=True)
         st.subheader("① 商品検索 (販売価格)")
@@ -305,7 +312,6 @@ if menu == "📦 在庫登録":
         with col_search3:
             st.write("") 
             st.write("")
-            # スマホで押しやすいように full_width を設定
             if st.button("🔍 情報を取得", use_container_width=True):
                 search_keyword = ""
                 if reg_mode == "🃏 シングルカード":
@@ -355,11 +361,13 @@ if menu == "📦 在庫登録":
                 psa_grade = st.selectbox("PSAグレード", ["未鑑定", "10", "9", "その他"], index=0)
                 psa_num = st.text_input("PSA証明番号 (Cert #)", placeholder="例: 12345678")
             with col2:
-                cost = st.number_input("仕入れ値 (円)", min_value=0, step=100)
+                # 【追加】数量入力
+                quantity = st.number_input("在庫数 (個)", min_value=1, value=1, step=1, help="仕入れ値や売値は「1個あたり」の金額を入力してください")
+                cost = st.number_input("仕入れ値 (1個あたり)", min_value=0, step=100)
                 c_p1, c_p2 = st.columns(2)
-                with c_p1: ref_sales = st.number_input("参考販売価格 (円)", value=initial_sales, step=100)
-                with c_p2: ref_buyback = st.number_input("参考買取価格 (手動)", value=0, step=100)
-                target_price = st.number_input("想定売値 (円)", value=initial_sales, step=100)
+                with c_p1: ref_sales = st.number_input("参考販売価格 (1個あたり)", value=initial_sales, step=100)
+                with c_p2: ref_buyback = st.number_input("参考買取価格 (1個あたり)", value=0, step=100)
+                target_price = st.number_input("想定売値 (1個あたり)", value=initial_sales, step=100)
                 location = st.text_input("保管場所", placeholder="例：防湿庫A")
             
             submitted = st.form_submit_button("登録する", use_container_width=True)
@@ -369,13 +377,14 @@ if menu == "📦 在庫登録":
                     '種類': [category], '状態': [condition], 'PSAグレード': [psa_grade],
                     '仕入れ日': [datetime.now().strftime('%Y-%m-%d')],
                     '仕入れ値': [cost], '想定売値': [target_price], '参考販売': [ref_sales], '参考買取': [ref_buyback], 
-                    '保管場所': [location], 'ステータス': ['在庫あり'], 'PSA番号': [str(psa_num)]
+                    '保管場所': [location], 'ステータス': ['在庫あり'], 'PSA番号': [str(psa_num)],
+                    '在庫数': [quantity] # 【追加】
                 })
                 if not df.empty: df = pd.concat([df, new_data], ignore_index=True)
                 else: df = new_data
                 save_data(df)
                 st.session_state['search_result'] = None
-                st.success(f"「{name}」を登録しました！")
+                st.success(f"「{name}」を {quantity}個 登録しました！")
 
 # ==========================================
 # 2. 在庫一覧・編集画面
@@ -383,7 +392,6 @@ if menu == "📦 在庫登録":
 elif menu == "📊 在庫一覧・編集":
     st.header("在庫リスト")
     if not df.empty:
-        # 【修正】スマホ用に表示列を絞るトグルスイッチ
         is_mobile_view = st.toggle("📱 スマホモード（列を絞る）", value=False)
         
         search_query = st.text_input("🔍 在庫を検索", placeholder="商品名、PSA番号、型番などで検索...")
@@ -414,6 +422,7 @@ elif menu == "📊 在庫一覧・編集":
         # 全カラムの設定
         all_column_config = {
             "削除": st.column_config.CheckboxColumn("削除", default=False),
+            "在庫数": st.column_config.NumberColumn("在庫数", format="%d個", min_value=0), # 【追加】
             "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
             "想定売値": st.column_config.NumberColumn(format="¥%d"),
             "参考販売": st.column_config.NumberColumn(format="¥%d"),
@@ -424,11 +433,9 @@ elif menu == "📊 在庫一覧・編集":
             "ステータス": st.column_config.SelectboxColumn(options=["在庫あり", "出品中", "売却済み", "PSA提出中"], required=True)
         }
 
-        # 【修正】スマホモード時は表示する列を限定する
+        # 【修正】スマホモード時は表示する列を限定する（在庫数を追加）
         if is_mobile_view:
-            # 必要なカラムだけ抽出（IDは編集機能のために必須だが隠すことは難しいので表示、他は重要度順）
-            target_cols = ["削除", "商品名", "ステータス", "想定売値", "RushMediaリンク", "PSAリンク", "ID"]
-            # 存在しないカラムを除外してフィルタリング
+            target_cols = ["削除", "商品名", "在庫数", "ステータス", "想定売値", "RushMediaリンク", "PSAリンク", "ID"]
             df_display = df_display[[c for c in target_cols if c in df_display.columns]]
             st.info("💡 スマホモード: 重要な列のみ表示しています。詳細編集はスイッチをOFFにしてください。")
 
@@ -441,7 +448,6 @@ elif menu == "📊 在庫一覧・編集":
         col_act1, col_act2 = st.columns([1, 1])
         with col_act1:
             if st.button("🗑️ チェックした項目を削除", use_container_width=True):
-                # 削除処理（カラムが減っていてもIDさえあれば削除可能）
                 if '削除' in edited_df.columns:
                     ids_to_delete = edited_df[edited_df['削除']]['ID'].tolist()
                     if ids_to_delete:
@@ -476,14 +482,12 @@ elif menu == "📊 在庫一覧・編集":
                     save_data(df)
                     txt.text("完了！"); time.sleep(1); st.rerun()
 
-        # 保存処理（スマホモードで列が減っている場合の考慮）
         cols_to_save = [c for c in edited_df.columns if c not in ['削除', 'PSAリンク', 'RushMediaリンク']]
         edited_content = edited_df[cols_to_save]
         
         if not edited_content.empty:
             df.set_index('ID', inplace=True)
             edited_content.set_index('ID', inplace=True)
-            # updateを使うと、存在するカラムだけが更新されるので安全
             df.update(edited_content)
             df.reset_index(inplace=True)
             save_data(df)
@@ -497,10 +501,14 @@ elif menu == "💰 収支分析":
     if not df.empty:
         stock_df = df[df['ステータス'] != '売却済み']
         col1, col2, col3 = st.columns(3)
-        total_cost = stock_df['仕入れ値'].sum()
-        total_target = stock_df['想定売値'].sum()
-        total_market_sales = stock_df['参考販売'].sum()
-        col1.metric("📦 在庫総数", f"{len(stock_df)} 点")
+        
+        # 【修正】在庫数を考慮して計算（単価×個数）
+        total_items = stock_df['在庫数'].sum()
+        total_cost = (stock_df['仕入れ値'] * stock_df['在庫数']).sum()
+        total_target = (stock_df['想定売値'] * stock_df['在庫数']).sum()
+        total_market_sales = (stock_df['参考販売'] * stock_df['在庫数']).sum()
+
+        col1.metric("📦 在庫総数", f"{total_items:,} 個")
         col2.metric("💰 仕入れ総額", f"¥{total_cost:,.0f}")
         col3.metric("🏷️ 想定売上総額", f"¥{total_target:,.0f}")
         st.divider()
@@ -509,6 +517,7 @@ elif menu == "💰 収支分析":
         st.divider()
         st.subheader("在庫の内訳")
         if not stock_df.empty:
-            chart_data = stock_df['種類'].value_counts()
+            # 在庫数を考慮したグラフ作成（種類ごとに個数を合計）
+            chart_data = stock_df.groupby('種類')['在庫数'].sum()
             st.dataframe(chart_data, use_container_width=True)
     else: st.info("データがありません。")
