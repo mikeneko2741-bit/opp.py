@@ -450,7 +450,11 @@ elif menu == "📊 在庫一覧・編集":
             mask = df_display.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
             df_display = df_display[mask]
 
-        df_display.insert(0, "削除", False)
+        # 【重要修正】on_selectを使わず、チェックボックスで選択させる
+        # 「選択」列を一番左に追加（初期値はFalse）
+        df_display.insert(0, "選択", False)
+        # 「削除」列はその次
+        df_display.insert(1, "削除", False)
         
         def make_psa_url(num):
             if pd.notna(num) and str(num).strip() != "":
@@ -459,10 +463,9 @@ elif menu == "📊 在庫一覧・編集":
             return None
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
-        # 【修正】テーブル内のRushMediaリンク列は削除済み
-
         # 全カラムの設定
         all_column_config = {
+            "選択": st.column_config.CheckboxColumn("選択", default=False, help="チェックすると詳細を表示します"),
             "削除": st.column_config.CheckboxColumn("削除", default=False),
             "在庫数": st.column_config.NumberColumn("在庫数", format="%d個", min_value=0),
             "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
@@ -475,30 +478,26 @@ elif menu == "📊 在庫一覧・編集":
         }
 
         if is_mobile_view:
-            target_cols = ["削除", "商品名", "在庫数", "ステータス", "想定売値", "PSAリンク", "ID"]
+            target_cols = ["選択", "削除", "商品名", "在庫数", "ステータス", "想定売値", "PSAリンク", "ID"]
             df_display = df_display[[c for c in target_cols if c in df_display.columns]]
             st.info("💡 スマホモード: 重要な列のみ表示しています。")
 
-        # 編集機能を有効にするため st.data_editor を使用 (on_select で選択も可能)
+        # on_select を削除し、以前の書き方に戻した
         edited_df = st.data_editor(
             df_display, num_rows="dynamic",
             column_config=all_column_config,
-            on_select="rerun", # 選択イベントを有効化
-            selection_mode="single-row", # 1行のみ選択可能
             key="inventory_editor",
             hide_index=True,
             use_container_width=True
         )
 
-        # 選択された行の情報を取得
-        selected_rows = st.session_state["inventory_editor"].get("selection", {}).get("rows", [])
+        # 【追加】チェックボックスで選択された行を取得して詳細表示
+        # "選択"カラムがTrueになっている行を探す
+        selected_rows_df = edited_df[edited_df['選択']]
         
-        # 【追加】詳細表示エリアの実装
-        if selected_rows:
-            selected_index = selected_rows[0]
-            # フィルタリング後のデータから選択された行を取得
-            # ※edited_df は編集後のデータなので、選択インデックスを使ってデータを取り出す
-            selected_row = edited_df.iloc[selected_index]
+        if not selected_rows_df.empty:
+            # 複数選択されていても、最初の1つだけを表示する
+            selected_row = selected_rows_df.iloc[0]
             
             raw_name = selected_row['商品名']
             # 検索用に商品名をクリーンアップ
@@ -532,6 +531,7 @@ elif menu == "📊 在庫一覧・編集":
         col_act1, col_act2 = st.columns([1, 1])
         with col_act1:
             if st.button("🗑️ チェックした項目を削除", use_container_width=True):
+                # 削除列があるものだけを対象にする
                 if '削除' in edited_df.columns:
                     ids_to_delete = edited_df[edited_df['削除']]['ID'].tolist()
                     if ids_to_delete:
@@ -560,8 +560,8 @@ elif menu == "📊 在庫一覧・編集":
                     save_data(df)
                     txt.text("完了！"); time.sleep(1); st.rerun()
 
-        # 編集内容の保存
-        cols_to_save = [c for c in edited_df.columns if c not in ['削除', 'PSAリンク']]
+        # 編集内容の保存（選択列・削除列は保存しない）
+        cols_to_save = [c for c in edited_df.columns if c not in ['選択', '削除', 'PSAリンク']]
         edited_content = edited_df[cols_to_save]
         
         if not edited_content.empty:
