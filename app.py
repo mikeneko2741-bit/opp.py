@@ -459,42 +459,49 @@ elif menu == "📊 在庫一覧・編集":
             return None
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
-        def make_rush_media_url(name):
-            if pd.notna(name) and str(name).strip() != "":
-                clean_name = re.sub(r'[【\[\(\{（].*?[】\]\)\}）]', '', str(name))
-                clean_name = re.sub(r'[A-Za-z0-9]+[-/][A-Za-z0-9]+', '', clean_name)
-                clean_name = re.sub(r'\s+', ' ', clean_name).strip()
-                if clean_name:
-                    return f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={quote(clean_name)}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
-            return None
-        df_display["RushMediaリンク"] = df_display["商品名"].apply(make_rush_media_url)
+        # 【修正】テーブル内のRushMediaリンク列は削除済み
 
-        # 【追加】詳細表示のための選択イベント設定
-        event = st.dataframe(
-            df_display,
-            on_select="rerun", # 選択時に再実行
-            selection_mode="single-row", # 1行だけ選択可能
-            column_config={
-                "削除": st.column_config.CheckboxColumn("削除", default=False),
-                "在庫数": st.column_config.NumberColumn("在庫数", format="%d個"),
-                "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
-                "想定売値": st.column_config.NumberColumn(format="¥%d"),
-                "参考販売": st.column_config.NumberColumn(format="¥%d"),
-                "PSAリンク": st.column_config.LinkColumn("PSA", display_text="証明書"),
-                "RushMediaリンク": st.column_config.LinkColumn("買取相場", display_text="RushMedia"),
-            },
+        # 全カラムの設定
+        all_column_config = {
+            "削除": st.column_config.CheckboxColumn("削除", default=False),
+            "在庫数": st.column_config.NumberColumn("在庫数", format="%d個", min_value=0),
+            "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
+            "想定売値": st.column_config.NumberColumn(format="¥%d"),
+            "参考販売": st.column_config.NumberColumn(format="¥%d"),
+            "参考買取": st.column_config.NumberColumn(format="¥%d"),
+            "PSA番号": st.column_config.TextColumn(help="8桁の証明番号"),
+            "PSAリンク": st.column_config.LinkColumn("PSA確認", display_text="証明書"),
+            "ステータス": st.column_config.SelectboxColumn(options=["在庫あり", "出品中", "売却済み", "PSA提出中"], required=True)
+        }
+
+        if is_mobile_view:
+            target_cols = ["削除", "商品名", "在庫数", "ステータス", "想定売値", "PSAリンク", "ID"]
+            df_display = df_display[[c for c in target_cols if c in df_display.columns]]
+            st.info("💡 スマホモード: 重要な列のみ表示しています。")
+
+        # 編集機能を有効にするため st.data_editor を使用 (on_select で選択も可能)
+        edited_df = st.data_editor(
+            df_display, num_rows="dynamic",
+            column_config=all_column_config,
+            on_select="rerun", # 選択イベントを有効化
+            selection_mode="single-row", # 1行のみ選択可能
+            key="inventory_editor",
             hide_index=True,
             use_container_width=True
         )
 
+        # 選択された行の情報を取得
+        selected_rows = st.session_state["inventory_editor"].get("selection", {}).get("rows", [])
+        
         # 【追加】詳細表示エリアの実装
-        if event.selection.rows:
-            selected_index = event.selection.rows[0]
+        if selected_rows:
+            selected_index = selected_rows[0]
             # フィルタリング後のデータから選択された行を取得
-            selected_row = df_display.iloc[selected_index]
+            # ※edited_df は編集後のデータなので、選択インデックスを使ってデータを取り出す
+            selected_row = edited_df.iloc[selected_index]
             
-            # クリーンな商品名を作成（検索用）
             raw_name = selected_row['商品名']
+            # 検索用に商品名をクリーンアップ
             clean_name = re.sub(r'[【\[\(\{（].*?[】\]\)\}）]', '', str(raw_name))
             clean_name = re.sub(r'[A-Za-z0-9]+[-/][A-Za-z0-9]+', '', clean_name)
             clean_name = re.sub(r'\s+', ' ', clean_name).strip()
@@ -502,31 +509,68 @@ elif menu == "📊 在庫一覧・編集":
             st.divider()
             st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
             
-            col_link1, col_link2, col_link3 = st.columns(3)
-            
-            with col_link1:
+            # 2列 x 2行 のボタン配置
+            c1, c2 = st.columns(2)
+            with c1:
                 mercari_url = f"https://jp.mercari.com/search?keyword={quote(clean_name)}&status=on_sale"
-                st.link_button("🔴 メルカリで相場を見る", mercari_url, use_container_width=True)
+                st.link_button("🔴 メルカリで相場", mercari_url, use_container_width=True)
+            with c2:
+                # RushMediaの検索URL生成
+                rush_url = f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={quote(clean_name)}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
+                st.link_button("🔵 ラッシュ買取表", rush_url, use_container_width=True)
             
-            with col_link2:
+            c3, c4 = st.columns(2)
+            with c3:
                 yahoo_url = f"https://paypayfleamarket.yahoo.co.jp/search/{quote(clean_name)}?open=1"
-                st.link_button("🟡 Yahoo!フリマで見る", yahoo_url, use_container_width=True)
-                
-            with col_link3:
+                st.link_button("🟡 Yahoo!フリマ", yahoo_url, use_container_width=True)
+            with c4:
                 clove_url = f"https://clove.jp/search?q={quote(clean_name)}"
                 st.link_button("⚫ Cloveで見る", clove_url, use_container_width=True)
             
-            st.info("💡 ヒント: 他のサイトへのリンクもここに追加できます。")
             st.divider()
 
-        # 削除ボタンなどの下部アクション（DataEditorではないので、編集機能は簡易化または削除機能を別途実装が必要だが、
-        # 今回はst.dataframeで表示のみにしているため、削除はID指定か、編集モードへの切り替えが必要。
-        # 簡易的に、st.data_editorに戻す案もあるが、on_selectはdata_editorでも使えるためそちらを採用）
+        col_act1, col_act2 = st.columns([1, 1])
+        with col_act1:
+            if st.button("🗑️ チェックした項目を削除", use_container_width=True):
+                if '削除' in edited_df.columns:
+                    ids_to_delete = edited_df[edited_df['削除']]['ID'].tolist()
+                    if ids_to_delete:
+                        df_new = df[~df['ID'].isin(ids_to_delete)]
+                        save_data(df_new)
+                        st.success(f"{len(ids_to_delete)} 件削除しました。")
+                        st.rerun()
+                    else: st.info("削除チェックがありません。")
+        with col_act2:
+            if st.button("🔄 表示中の販売価格を更新", use_container_width=True):
+                ids_to_update = df_display['ID'].tolist()
+                if not ids_to_update: st.warning("データがありません。")
+                else:
+                    bar = st.progress(0); txt = st.empty()
+                    for i, rid in enumerate(ids_to_update):
+                        txt.text(f"更新中... ({i+1}/{len(ids_to_update)})")
+                        bar.progress((i + 1) / len(ids_to_update))
+                        row = df[df['ID'] == rid].iloc[0]
+                        keyword = row['商品名']
+                        try:
+                            results = search_card_rush(keyword)
+                            if results:
+                                df.loc[df['ID'] == rid, '参考販売'] = results[0]['price']
+                            time.sleep(1)
+                        except: pass
+                    save_data(df)
+                    txt.text("完了！"); time.sleep(1); st.rerun()
+
+        # 編集内容の保存
+        cols_to_save = [c for c in edited_df.columns if c not in ['削除', 'PSAリンク']]
+        edited_content = edited_df[cols_to_save]
         
-        # 修正: st.dataframeだと編集できないので、st.data_editorに戻してon_selectを使う
-        # ※Streamlitのバージョンによってはdata_editorのon_selectが未対応の場合があるが、最新ならOK
-        # 安全策として、上書き保存用の編集エリアは別途用意するか、
-        # 今回は「詳細表示」を優先して、編集はスマホモードOFF時に直接行えるようにする（コード修正済み）
+        if not edited_content.empty:
+            df.set_index('ID', inplace=True)
+            edited_content.set_index('ID', inplace=True)
+            df.update(edited_content)
+            df.reset_index(inplace=True)
+            save_data(df)
+    else: st.info("データがありません。")
 
 # ==========================================
 # 3. 収支分析画面
