@@ -1,7 +1,7 @@
-streamlit
+streamlit>=1.35.0
 pandas
-requests
-beautifulsoup4
 gspread
 oauth2client
 gspread-dataframe
+requests
+beautifulsoup4
