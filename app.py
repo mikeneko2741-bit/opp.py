@@ -262,21 +262,15 @@ def fetch_from_url(url):
         res.encoding = "utf-8" # Googleの結果からUTF-8で確定
         soup = BeautifulSoup(res.content, 'html.parser')
         
-        # 【修正】網を広げる：複数のクラス名を探す
-        # item_box: 一般的
-        # goods_box, item_data: MakeShopの別パターン
-        # .sys_item_row: 検索結果リスト
         items = soup.select('.item_box, .goods_box, .item_data, .sys_item_row, .search_result_item')
         
         for item in items:
-            # 商品名取得（クラス名も複数パターン想定）
             name_tag = item.select_one('.item_name, .goods_name, .name')
             if not name_tag: continue
             
             name = name_tag.get_text(strip=True)
             
             price = 0
-            # 価格取得
             price_tag = item.select_one('.figure, .price, .goods_price')
             if price_tag:
                 price_text = price_tag.get_text(strip=True).replace(',', '')
@@ -286,7 +280,6 @@ def fetch_from_url(url):
             if price > 0:
                 results.append({"name": name, "price": price})
         
-        # 重複除去
         unique_results = []
         seen_names = set()
         for r in results:
@@ -305,23 +298,20 @@ def search_card_rush(keyword):
     base_url = "https://www.cardrush-pokemon.jp"
     encoded_keyword = quote(keyword.encode('utf-8'))
     
-    # パターンA: product-list (現在の主流)
+    # パターンA: product-list
     url_a = f"{base_url}/product-list?keyword={encoded_keyword}&num=100"
     results_a = fetch_from_url(url_a)
     
-    # もしAで十分な結果が出れば即終了
     if len(results_a) > 1:
         return results_a[:50]
         
-    # パターンB: shopbrand (昔ながらの検索URL - 予備)
+    # パターンB: shopbrand
     url_b = f"{base_url}/shop/shopbrand.html?search={encoded_keyword}"
     results_b = fetch_from_url(url_b)
     
-    # 結果が多い方を採用
     if len(results_b) > len(results_a):
         return results_b[:50]
     else:
-        # どちらもダメなら、とりあえず取れたものを返す
         return results_a[:50]
 
 # ---------------------------------------------------------
@@ -469,14 +459,32 @@ if menu == "📦 在庫登録":
 elif menu == "📊 在庫一覧・編集":
     st.header("在庫リスト")
     if not df.empty:
-        is_mobile_view = st.toggle("📱 スマホモード（列を絞る）", value=False)
+        # 【追加】絞り込みフィルターのUI
+        col_filter1, col_filter2 = st.columns([1, 2])
+        with col_filter1:
+            is_mobile_view = st.toggle("📱 スマホモード（列を絞る）", value=False)
+        
+        with col_filter2:
+            # データの種類リストを取得
+            all_categories = list(df['種類'].unique()) if '種類' in df.columns else []
+            selected_categories = st.multiselect("📂 種類で絞り込み (未選択で全表示)", all_categories, default=[])
         
         search_query = st.text_input("🔍 在庫を検索", placeholder="商品名、PSA番号、型番などで検索...")
+        
+        # フィルタリング処理の実行
+        # 1. まず全データのコピーを作成
+        df_display = df.copy()
+        
+        # 2. 種類フィルター適用 (選択がある場合のみ)
+        if selected_categories:
+            df_display = df_display[df_display['種類'].isin(selected_categories)]
+        
+        # 3. 検索キーワードフィルター適用
         if search_query:
-            mask = df.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
-            df_display = df[mask].copy()
-        else: df_display = df.copy()
+            mask = df_display.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
+            df_display = df_display[mask]
 
+        # 削除用の列を追加
         df_display.insert(0, "削除", False)
         
         def make_psa_url(num):
