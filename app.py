@@ -15,11 +15,9 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 # ---------------------------------------------------------
 # 設定・定数
 # ---------------------------------------------------------
-# Googleスプレッドシートの設定
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ポケカ在庫管理DB'
 
-# エキスパンションリスト (完全版)
 EXPANSION_LIST = {
     "--- MEGAシリーズ (2025~) ---": "",
     "MEGAドリームex (M2a)": "M2a",
@@ -162,7 +160,7 @@ EXPANSION_LIST = {
 }
 
 # ---------------------------------------------------------
-# データ読み書き機能 (Cloud/Local両対応・柔軟版)
+# データ読み書き機能
 # ---------------------------------------------------------
 @st.cache_resource
 def get_gspread_client():
@@ -251,16 +249,20 @@ def save_data(df):
         set_with_dataframe(sheet, df_to_save)
 
 # ---------------------------------------------------------
-# スクレイピング機能（EUC-JP対応版）
+# スクレイピング機能（二刀流: UTF-8 & EUC-JP 両対応）
 # ---------------------------------------------------------
-def search_card_rush(keyword):
+def fetch_card_rush_data(keyword, encoding_type):
+    """指定された文字コードで検索を試みる内部関数"""
     results = []
     try:
         base_url = "https://www.cardrush-pokemon.jp"
         
-        # 【修正点1】キーワードをEUC-JPに変換してからURLに埋め込む
-        # これによりサイト側が文字化けせず認識できるようになります
-        encoded_keyword = quote(keyword.encode('euc-jp'))
+        # キーワードを指定の文字コードでURLエンコード
+        try:
+            encoded_keyword = quote(keyword.encode(encoding_type))
+        except UnicodeEncodeError:
+            return [] # 変換できない文字がある場合はスキップ
+            
         search_url = f"{base_url}/product-list?keyword={encoded_keyword}&num=100"
         
         headers = {
@@ -268,33 +270,69 @@ def search_card_rush(keyword):
         }
         res = requests.get(search_url, headers=headers, timeout=10)
         
-        # 【修正点2】取得したデータの文字コードもEUC-JPとして読み込む
-        res.encoding = "euc-jp"
+        # レスポンスの文字コードを強制指定
+        res.encoding = encoding_type
         
         soup = BeautifulSoup(res.content, 'html.parser')
         
-        # サイドバーなどを除外してメインカラム内だけを探す
-        main_area = soup.select_one('#one_main_column') or soup.select_one('#main_column') or soup
-        items = main_area.select('.item_box')
+        # 検索結果のコンテナを探す（IDが変わっている可能性を考慮して複数トライ）
+        # .item_box クラスを持つ要素をすべて取得するが、サイドバーの誤検知を防ぐため
+        # 明らかにメインエリアっぽい場所を優先するロジックは維持しつつ、緩和する
         
-        # 50件まで取得
-        for item in items[:50]:
+        # 全ての .item_box を取得
+        items = soup.select('.item_box')
+        
+        for item in items:
             name_tag = item.select_one('.item_name')
-            name = name_tag.get_text(strip=True) if name_tag else "取得不可"
+            if not name_tag: continue
+            
+            name = name_tag.get_text(strip=True)
             
             price = 0
             price_tag = item.select_one('.figure')
             if price_tag:
-                nums = re.findall(r'\d+', price_tag.get_text(strip=True).replace(',', ''))
+                price_text = price_tag.get_text(strip=True).replace(',', '')
+                nums = re.findall(r'\d+', price_text)
                 if nums: price = int(nums[0])
             
             if price > 0:
                 results.append({"name": name, "price": price})
+        
+        # 重複除去（サイドバーなどで同じ商品が出る場合があるため）
+        unique_results = []
+        seen_names = set()
+        for r in results:
+            if r['name'] not in seen_names:
+                unique_results.append(r)
+                seen_names.add(r['name'])
                 
-        return results
+        return unique_results[:50] # 最大50件
+        
     except Exception:
-        # エラー時は空リストを返す（UnicodeEncodeErrorなどの対策）
         return []
+
+def search_card_rush(keyword):
+    """
+    UTF-8とEUC-JPの両方で検索を試し、結果が多い（正しい）方を採用する
+    """
+    # 1. まずUTF-8で試す
+    results_utf8 = fetch_card_rush_data(keyword, 'utf-8')
+    
+    # 2. 次にEUC-JPで試す
+    results_euc = fetch_card_rush_data(keyword, 'euc-jp')
+    
+    # 結果の比較
+    # UTF-8で2件以上取れていれば、UTF-8が正解の可能性が高い
+    if len(results_utf8) > 1:
+        return results_utf8
+    # UTF-8がダメで、EUC-JPで取れていればそっちを採用
+    elif len(results_euc) > 0:
+        return results_euc
+    # どっちも1件以下なら、とりあえず取れた方を返す（UTF-8優先）
+    elif len(results_utf8) > 0:
+        return results_utf8
+    else:
+        return results_euc
 
 # ---------------------------------------------------------
 # アプリ画面の構築
@@ -357,7 +395,7 @@ if menu == "📦 在庫登録":
         if 'selected_item' not in st.session_state: st.session_state['selected_item'] = None
 
         if search_keyword:
-            with st.spinner('カードラッシュから情報を取得中...'):
+            with st.spinner('カードラッシュから情報を取得中... (文字コード自動判別)'):
                 results = search_card_rush(search_keyword)
                 st.session_state['search_candidates'] = results
                 st.session_state['selected_item'] = None
@@ -527,7 +565,6 @@ elif menu == "📊 在庫一覧・編集":
 
                         if search_key:
                             try:
-                                # 更新時も文字コード対応版の関数を使うので安心
                                 results = search_card_rush(search_key)
                                 if results:
                                     df.loc[df['ID'] == rid, '参考販売'] = results[0]['price']
