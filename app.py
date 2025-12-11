@@ -251,25 +251,35 @@ def save_data(df):
         set_with_dataframe(sheet, df_to_save)
 
 # ---------------------------------------------------------
-# スクレイピング機能（販売価格検索・リスト取得対応）
+# スクレイピング機能（厳密な取得ロジック）
 # ---------------------------------------------------------
 def search_card_rush(keyword):
-    # 【修正】複数の候補を取得してリストで返すように変更
     results = []
     try:
         base_url = "https://www.cardrush-pokemon.jp"
-        search_url = f"{base_url}/product-list?keyword={quote(keyword)}"
-        # 【修正】User-Agentを一般的なChromeのものに変更し、正しくPCサイトを取得させる
+        # 【修正】num=100を追加して表示件数を増やし、ページネーション漏れを防ぐ
+        search_url = f"{base_url}/product-list?keyword={quote(keyword)}&num=100"
+        
+        # User-AgentはMacのChromeに設定（Bot判定回避）
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         }
         res = requests.get(search_url, headers=headers, timeout=10)
-        res.encoding = res.apparent_encoding
+        
+        # 【修正】文字コードをUTF-8に強制指定（自動判定ミスによる検索失敗を防ぐ）
+        res.encoding = "utf-8"
+        
         soup = BeautifulSoup(res.content, 'html.parser')
         
-        items = soup.select('.item_box')
-        # 最大20件まで取得（少し増やしました）
-        for item in items[:20]:
+        # 【修正】サイドバーの誤検知を防ぐため、メインカラム（ID指定）の中だけを探す
+        # カードラッシュのメインカラムIDは通常 #one_main_column または #main_column
+        # 汎用的に mainタグ周辺を探すが、ここではMakeShop特有の構造を考慮
+        main_area = soup.select_one('#one_main_column') or soup.select_one('#main_column') or soup
+        
+        items = main_area.select('.item_box')
+        
+        # 最大30件まで取得
+        for item in items[:30]:
             name_tag = item.select_one('.item_name')
             name = name_tag.get_text(strip=True) if name_tag else "取得不可"
             
