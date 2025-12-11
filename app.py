@@ -199,7 +199,18 @@ def get_sheet():
 def load_data():
     sheet = get_sheet()
     if sheet:
+        # データを取得
         df = get_as_dataframe(sheet, evaluate_formulas=True)
+        
+        # 【重要修正】カラムチェックを行う
+        # もしデータが空っぽ、またはID列がない場合は、強制的に初期化する
+        if df.empty or 'ID' not in df.columns:
+            return pd.DataFrame(columns=[
+                'ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
+                '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数'
+            ])
+
+        # ここまで来ればID列はあるはずなので、安全にdropnaできる
         df = df.dropna(subset=['ID'])
         df = df[df['ID'] != '']
         
@@ -450,10 +461,7 @@ elif menu == "📊 在庫一覧・編集":
             mask = df_display.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
             df_display = df_display[mask]
 
-        # 【重要修正】on_selectを使わず、チェックボックスで選択させる
-        # 「選択」列を一番左に追加（初期値はFalse）
         df_display.insert(0, "選択", False)
-        # 「削除」列はその次
         df_display.insert(1, "削除", False)
         
         def make_psa_url(num):
@@ -463,7 +471,6 @@ elif menu == "📊 在庫一覧・編集":
             return None
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
-        # 全カラムの設定
         all_column_config = {
             "選択": st.column_config.CheckboxColumn("選択", default=False, help="チェックすると詳細を表示します"),
             "削除": st.column_config.CheckboxColumn("削除", default=False),
@@ -482,7 +489,6 @@ elif menu == "📊 在庫一覧・編集":
             df_display = df_display[[c for c in target_cols if c in df_display.columns]]
             st.info("💡 スマホモード: 重要な列のみ表示しています。")
 
-        # on_select を削除し、以前の書き方に戻した
         edited_df = st.data_editor(
             df_display, num_rows="dynamic",
             column_config=all_column_config,
@@ -491,16 +497,12 @@ elif menu == "📊 在庫一覧・編集":
             use_container_width=True
         )
 
-        # 【追加】チェックボックスで選択された行を取得して詳細表示
-        # "選択"カラムがTrueになっている行を探す
         selected_rows_df = edited_df[edited_df['選択']]
         
         if not selected_rows_df.empty:
-            # 複数選択されていても、最初の1つだけを表示する
             selected_row = selected_rows_df.iloc[0]
             
             raw_name = selected_row['商品名']
-            # 検索用に商品名をクリーンアップ
             clean_name = re.sub(r'[【\[\(\{（].*?[】\]\)\}）]', '', str(raw_name))
             clean_name = re.sub(r'[A-Za-z0-9]+[-/][A-Za-z0-9]+', '', clean_name)
             clean_name = re.sub(r'\s+', ' ', clean_name).strip()
@@ -508,13 +510,11 @@ elif menu == "📊 在庫一覧・編集":
             st.divider()
             st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
             
-            # 2列 x 2行 のボタン配置
             c1, c2 = st.columns(2)
             with c1:
                 mercari_url = f"https://jp.mercari.com/search?keyword={quote(clean_name)}&status=on_sale"
                 st.link_button("🔴 メルカリで相場", mercari_url, use_container_width=True)
             with c2:
-                # RushMediaの検索URL生成
                 rush_url = f"https://cardrush.media/pokemon/buying_prices?displayMode=%E3%83%AA%E3%82%B9%E3%83%88&name={quote(clean_name)}&sort%5Bkey%5D=amount&sort%5Border%5D=desc"
                 st.link_button("🔵 ラッシュ買取表", rush_url, use_container_width=True)
             
@@ -531,7 +531,6 @@ elif menu == "📊 在庫一覧・編集":
         col_act1, col_act2 = st.columns([1, 1])
         with col_act1:
             if st.button("🗑️ チェックした項目を削除", use_container_width=True):
-                # 削除列があるものだけを対象にする
                 if '削除' in edited_df.columns:
                     ids_to_delete = edited_df[edited_df['削除']]['ID'].tolist()
                     if ids_to_delete:
@@ -560,7 +559,6 @@ elif menu == "📊 在庫一覧・編集":
                     save_data(df)
                     txt.text("完了！"); time.sleep(1); st.rerun()
 
-        # 編集内容の保存（選択列・削除列は保存しない）
         cols_to_save = [c for c in edited_df.columns if c not in ['選択', '削除', 'PSAリンク']]
         edited_content = edited_df[cols_to_save]
         
