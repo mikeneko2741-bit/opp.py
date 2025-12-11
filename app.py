@@ -249,47 +249,35 @@ def save_data(df):
         set_with_dataframe(sheet, df_to_save)
 
 # ---------------------------------------------------------
-# スクレイピング機能（二刀流: UTF-8 & EUC-JP 両対応）
+# スクレイピング機能（強化版：ダブルアクセス & マルチセレクタ）
 # ---------------------------------------------------------
-def fetch_card_rush_data(keyword, encoding_type):
-    """指定された文字コードで検索を試みる内部関数"""
+def fetch_from_url(url):
+    """指定URLからデータを取得する共通関数"""
     results = []
     try:
-        base_url = "https://www.cardrush-pokemon.jp"
-        
-        # キーワードを指定の文字コードでURLエンコード
-        try:
-            encoded_keyword = quote(keyword.encode(encoding_type))
-        except UnicodeEncodeError:
-            return [] # 変換できない文字がある場合はスキップ
-            
-        search_url = f"{base_url}/product-list?keyword={encoded_keyword}&num=100"
-        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         }
-        res = requests.get(search_url, headers=headers, timeout=10)
-        
-        # レスポンスの文字コードを強制指定
-        res.encoding = encoding_type
-        
+        res = requests.get(url, headers=headers, timeout=10)
+        res.encoding = "utf-8" # Googleの結果からUTF-8で確定
         soup = BeautifulSoup(res.content, 'html.parser')
         
-        # 検索結果のコンテナを探す（IDが変わっている可能性を考慮して複数トライ）
-        # .item_box クラスを持つ要素をすべて取得するが、サイドバーの誤検知を防ぐため
-        # 明らかにメインエリアっぽい場所を優先するロジックは維持しつつ、緩和する
-        
-        # 全ての .item_box を取得
-        items = soup.select('.item_box')
+        # 【修正】網を広げる：複数のクラス名を探す
+        # item_box: 一般的
+        # goods_box, item_data: MakeShopの別パターン
+        # .sys_item_row: 検索結果リスト
+        items = soup.select('.item_box, .goods_box, .item_data, .sys_item_row, .search_result_item')
         
         for item in items:
-            name_tag = item.select_one('.item_name')
+            # 商品名取得（クラス名も複数パターン想定）
+            name_tag = item.select_one('.item_name, .goods_name, .name')
             if not name_tag: continue
             
             name = name_tag.get_text(strip=True)
             
             price = 0
-            price_tag = item.select_one('.figure')
+            # 価格取得
+            price_tag = item.select_one('.figure, .price, .goods_price')
             if price_tag:
                 price_text = price_tag.get_text(strip=True).replace(',', '')
                 nums = re.findall(r'\d+', price_text)
@@ -298,41 +286,43 @@ def fetch_card_rush_data(keyword, encoding_type):
             if price > 0:
                 results.append({"name": name, "price": price})
         
-        # 重複除去（サイドバーなどで同じ商品が出る場合があるため）
+        # 重複除去
         unique_results = []
         seen_names = set()
         for r in results:
             if r['name'] not in seen_names:
                 unique_results.append(r)
                 seen_names.add(r['name'])
-                
-        return unique_results[:50] # 最大50件
         
+        return unique_results
     except Exception:
         return []
 
 def search_card_rush(keyword):
     """
-    UTF-8とEUC-JPの両方で検索を試し、結果が多い（正しい）方を採用する
+    複数のURLパターンを試して、最も結果が良いものを返す
     """
-    # 1. まずUTF-8で試す
-    results_utf8 = fetch_card_rush_data(keyword, 'utf-8')
+    base_url = "https://www.cardrush-pokemon.jp"
+    encoded_keyword = quote(keyword.encode('utf-8'))
     
-    # 2. 次にEUC-JPで試す
-    results_euc = fetch_card_rush_data(keyword, 'euc-jp')
+    # パターンA: product-list (現在の主流)
+    url_a = f"{base_url}/product-list?keyword={encoded_keyword}&num=100"
+    results_a = fetch_from_url(url_a)
     
-    # 結果の比較
-    # UTF-8で2件以上取れていれば、UTF-8が正解の可能性が高い
-    if len(results_utf8) > 1:
-        return results_utf8
-    # UTF-8がダメで、EUC-JPで取れていればそっちを採用
-    elif len(results_euc) > 0:
-        return results_euc
-    # どっちも1件以下なら、とりあえず取れた方を返す（UTF-8優先）
-    elif len(results_utf8) > 0:
-        return results_utf8
+    # もしAで十分な結果が出れば即終了
+    if len(results_a) > 1:
+        return results_a[:50]
+        
+    # パターンB: shopbrand (昔ながらの検索URL - 予備)
+    url_b = f"{base_url}/shop/shopbrand.html?search={encoded_keyword}"
+    results_b = fetch_from_url(url_b)
+    
+    # 結果が多い方を採用
+    if len(results_b) > len(results_a):
+        return results_b[:50]
     else:
-        return results_euc
+        # どちらもダメなら、とりあえず取れたものを返す
+        return results_a[:50]
 
 # ---------------------------------------------------------
 # アプリ画面の構築
@@ -395,7 +385,7 @@ if menu == "📦 在庫登録":
         if 'selected_item' not in st.session_state: st.session_state['selected_item'] = None
 
         if search_keyword:
-            with st.spinner('カードラッシュから情報を取得中... (文字コード自動判別)'):
+            with st.spinner('カードラッシュから情報を取得中... (複数ルート検索)'):
                 results = search_card_rush(search_keyword)
                 st.session_state['search_candidates'] = results
                 st.session_state['selected_item'] = None
@@ -553,23 +543,13 @@ elif menu == "📊 在庫一覧・編集":
                         row = df[df['ID'] == rid].iloc[0]
                         
                         keyword = row['商品名']
-                        model_num = str(row['型番'])
-                        search_key = ""
-                        if "-BOX" in model_num and "BOX" in row['商品名']:
-                            search_key = row['商品名']
-                        elif "-" in model_num:
-                             try: ec, cn = model_num.split("-", 1); search_key = f"{ec} {cn}"
-                             except: search_key = row['商品名']
-                        else:
-                            search_key = row['商品名']
-
-                        if search_key:
-                            try:
-                                results = search_card_rush(search_key)
-                                if results:
-                                    df.loc[df['ID'] == rid, '参考販売'] = results[0]['price']
-                                time.sleep(1)
-                            except: pass
+                        # 更新時も同じ最強ロジックを使う
+                        try:
+                            results = search_card_rush(keyword)
+                            if results:
+                                df.loc[df['ID'] == rid, '参考販売'] = results[0]['price']
+                            time.sleep(1)
+                        except: pass
                     save_data(df)
                     txt.text("完了！"); time.sleep(1); st.rerun()
 
