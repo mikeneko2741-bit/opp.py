@@ -251,35 +251,34 @@ def save_data(df):
         set_with_dataframe(sheet, df_to_save)
 
 # ---------------------------------------------------------
-# スクレイピング機能（厳密な取得ロジック）
+# スクレイピング機能（EUC-JP対応版）
 # ---------------------------------------------------------
 def search_card_rush(keyword):
     results = []
     try:
         base_url = "https://www.cardrush-pokemon.jp"
-        # 【修正】num=100を追加して表示件数を増やし、ページネーション漏れを防ぐ
-        search_url = f"{base_url}/product-list?keyword={quote(keyword)}&num=100"
         
-        # User-AgentはMacのChromeに設定（Bot判定回避）
+        # 【修正点1】キーワードをEUC-JPに変換してからURLに埋め込む
+        # これによりサイト側が文字化けせず認識できるようになります
+        encoded_keyword = quote(keyword.encode('euc-jp'))
+        search_url = f"{base_url}/product-list?keyword={encoded_keyword}&num=100"
+        
         headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         }
         res = requests.get(search_url, headers=headers, timeout=10)
         
-        # 【修正】文字コードをUTF-8に強制指定（自動判定ミスによる検索失敗を防ぐ）
-        res.encoding = "utf-8"
+        # 【修正点2】取得したデータの文字コードもEUC-JPとして読み込む
+        res.encoding = "euc-jp"
         
         soup = BeautifulSoup(res.content, 'html.parser')
         
-        # 【修正】サイドバーの誤検知を防ぐため、メインカラム（ID指定）の中だけを探す
-        # カードラッシュのメインカラムIDは通常 #one_main_column または #main_column
-        # 汎用的に mainタグ周辺を探すが、ここではMakeShop特有の構造を考慮
+        # サイドバーなどを除外してメインカラム内だけを探す
         main_area = soup.select_one('#one_main_column') or soup.select_one('#main_column') or soup
-        
         items = main_area.select('.item_box')
         
-        # 最大30件まで取得
-        for item in items[:30]:
+        # 50件まで取得
+        for item in items[:50]:
             name_tag = item.select_one('.item_name')
             name = name_tag.get_text(strip=True) if name_tag else "取得不可"
             
@@ -294,6 +293,7 @@ def search_card_rush(keyword):
                 
         return results
     except Exception:
+        # エラー時は空リストを返す（UnicodeEncodeErrorなどの対策）
         return []
 
 # ---------------------------------------------------------
@@ -527,6 +527,7 @@ elif menu == "📊 在庫一覧・編集":
 
                         if search_key:
                             try:
+                                # 更新時も文字コード対応版の関数を使うので安心
                                 results = search_card_rush(search_key)
                                 if results:
                                     df.loc[df['ID'] == rid, '参考販売'] = results[0]['price']
