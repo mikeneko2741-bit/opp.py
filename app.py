@@ -103,7 +103,6 @@ EXPANSION_LIST = {
     "禁断の光 (SM6)": "SM6",
     "ウルトラフォース (SM5+)": "SM5+",
     "ウルトラサン (SM5S)": "SM5S",
-    "ウルトラサン (SM5S)": "SM5S",
     "ウルトラムーン (SM5M)": "SM5M",
     "GXバトルブースト (SM4+)": "SM4+",
     "覚醒の勇者 (SM4S)": "SM4S",
@@ -210,7 +209,6 @@ def load_data():
             required_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
                              '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数']
             df_fresh = pd.DataFrame(columns=required_cols)
-            # シートが空の時だけ書き込む（安全策）
             if df.empty:
                 set_with_dataframe(sheet, df_fresh)
             return df_fresh
@@ -262,7 +260,7 @@ def save_data(df):
         set_with_dataframe(sheet, df_to_save)
 
 # ---------------------------------------------------------
-# スクレイピング & クリーニング
+# スクレイピング & クリーニング (改良版)
 # ---------------------------------------------------------
 def fetch_from_url(url):
     results = []
@@ -308,12 +306,23 @@ def search_card_rush(keyword):
     if len(results_b) > len(results_a): return results_b[:50]
     else: return results_a[:50]
 
+# 【修正】商品名の「最初の名前」だけを抜き出す強力クリーニング
 def clean_product_name(text):
     if not isinstance(text, str): return str(text)
-    text = re.sub(r'[【\[\(\{（〔].*?[】\]\)\}）〕]', '', text)
-    text = re.sub(r'^[A-Za-z0-9]+[-]', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    
+    # 1. 先頭にある【状態...】や管理番号などのゴミを削除
+    text = re.sub(r'^[【\[\(\{（〔].*?[】\]\)\}）〕]', '', text).strip()
+    
+    # 2. 「最初のスペース」または「何らかのカッコの始まり」で文章を区切る
+    # 区切り文字: 半角スペース, 全角スペース, [, (, {, 【, 〔
+    split_chars = r'[ 　\[\(\{【（〔]'
+    match = re.split(split_chars, text, 1) # 1回だけ分割
+    
+    if match:
+        # 分割された最初の部分を返す（これが純粋な名前）
+        return match[0].strip()
+        
+    return text.strip()
 
 # ---------------------------------------------------------
 # アプリ画面
@@ -450,7 +459,6 @@ elif menu == "📊 在庫一覧・編集":
         
         search_query = st.text_input("🔍 在庫を検索", placeholder="商品名、PSA番号、型番などで検索...")
         
-        # フィルタリング
         df_display = df.copy()
         if selected_categories:
             df_display = df_display[df_display['種類'].isin(selected_categories)]
@@ -458,15 +466,9 @@ elif menu == "📊 在庫一覧・編集":
             mask = df_display.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
             df_display = df_display[mask]
 
-        # 【選択用セレクトボックスの作成】
-        # "選択"列は削除して、代わりにこのセレクトボックスを使う
         st.write("▼ 詳細を見たい商品を選択してください")
-        
-        # セレクトボックス用に分かりやすい名前リストを作成
-        # 商品名 + ID（重複防止）の辞書を作る
         select_options = {}
         for idx, row in df_display.iterrows():
-            # 表示名: 商品名 [IDの一部]
             label = f"{row['商品名']} (ID:{row['ID']})"
             select_options[label] = row['ID']
         
@@ -477,7 +479,6 @@ elif menu == "📊 在庫一覧・編集":
             placeholder="選択または入力..."
         )
 
-        # 削除用列の追加
         df_display.insert(0, "削除", False)
         
         def make_psa_url(num):
@@ -504,7 +505,6 @@ elif menu == "📊 在庫一覧・編集":
             df_display = df_display[[c for c in target_cols if c in df_display.columns]]
             st.info("💡 スマホモード: 重要な列のみ表示しています。")
 
-        # 編集エリア
         edited_df = st.data_editor(
             df_display, num_rows="dynamic",
             column_config=all_column_config,
@@ -513,20 +513,19 @@ elif menu == "📊 在庫一覧・編集":
             use_container_width=True
         )
 
-        # 【詳細表示エリア】
         if selected_label:
-            # 選択されたIDを取得
             target_id = select_options[selected_label]
-            # 編集後のデータから対象行を取得
             target_row = edited_df[edited_df['ID'] == target_id]
             
             if not target_row.empty:
                 row_data = target_row.iloc[0]
                 raw_name = row_data['商品名']
+                # 【修正】ここで「最初の名前だけ」を抽出
                 clean_name = clean_product_name(raw_name)
                 
                 st.divider()
                 st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
+                # st.caption(f"検索ワード: {clean_name}") # デバッグ用
                 
                 c1, c2 = st.columns(2)
                 with c1:
