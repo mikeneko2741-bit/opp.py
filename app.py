@@ -259,21 +259,24 @@ def search_card_rush(keyword):
     try:
         base_url = "https://www.cardrush-pokemon.jp"
         search_url = f"{base_url}/product-list?keyword={quote(keyword)}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(search_url, headers=headers, timeout=5)
+        # 【修正】User-Agentを一般的なChromeのものに変更し、正しくPCサイトを取得させる
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        }
+        res = requests.get(search_url, headers=headers, timeout=10)
         res.encoding = res.apparent_encoding
         soup = BeautifulSoup(res.content, 'html.parser')
         
         items = soup.select('.item_box')
-        # 最大10件まで取得
-        for item in items[:10]:
+        # 最大20件まで取得（少し増やしました）
+        for item in items[:20]:
             name_tag = item.select_one('.item_name')
-            name = name_tag.text.strip() if name_tag else "取得不可"
+            name = name_tag.get_text(strip=True) if name_tag else "取得不可"
             
             price = 0
             price_tag = item.select_one('.figure')
             if price_tag:
-                nums = re.findall(r'\d+', price_tag.text.replace(',', ''))
+                nums = re.findall(r'\d+', price_tag.get_text(strip=True).replace(',', ''))
                 if nums: price = int(nums[0])
             
             if price > 0:
@@ -303,12 +306,11 @@ if menu == "📦 在庫登録":
         
         st.subheader("① 商品検索 (販売価格)")
         
-        # 【追加】検索モードの切り替え
         search_tab1, search_tab2 = st.tabs(["🔢 型番/パックで検索", "🔤 キーワード検索"])
         
         search_keyword = ""
         
-        # タブ1: 型番検索 (従来)
+        # タブ1: 型番検索
         with search_tab1:
             col_search1, col_search2 = st.columns([2, 1])
             with col_search1:
@@ -331,7 +333,7 @@ if menu == "📦 在庫登録":
                         search_keyword = f"{exp_name_only} BOX"
                     else: st.warning("エキスパンションを選択してください")
 
-        # タブ2: キーワード検索 (新規)
+        # タブ2: キーワード検索
         with search_tab2:
             free_word = st.text_input("カード名 / 商品名", placeholder="例: ピカチュウ, ナンジャモ, ミモザ")
             if st.button("🔍 名前で検索", key="btn_search_name", use_container_width=True):
@@ -348,15 +350,9 @@ if menu == "📦 在庫登録":
             with st.spinner('カードラッシュから情報を取得中...'):
                 results = search_card_rush(search_keyword)
                 st.session_state['search_candidates'] = results
-                st.session_state['selected_item'] = None # 再検索したら選択解除
+                st.session_state['selected_item'] = None
                 if not results:
                     st.error("見つかりませんでした。")
-                else:
-                    # 型番検索（ピンポイント）の場合は1件目を自動選択
-                    if "search_tab1" in str(st.session_state) and len(results) > 0:
-                         # タブ判定が難しいため、検索結果が1件だけなら自動選択などのロジックも可だが、
-                         # ここでは明示的にリスト表示または、型番検索なら自動セットする流れにする
-                         pass 
 
         # 検索結果（候補リスト）の表示
         if st.session_state['search_candidates'] and not st.session_state['selected_item']:
@@ -369,7 +365,7 @@ if menu == "📦 在庫登録":
                 with c3:
                     if st.button("選択", key=f"sel_{i}", use_container_width=True):
                         st.session_state['selected_item'] = item
-                        st.session_state['search_candidates'] = [] # 選択したらリストを消す
+                        st.session_state['search_candidates'] = []
                         st.rerun()
             st.write("---")
 
@@ -396,12 +392,8 @@ if menu == "📦 在庫登録":
             
             with col1:
                 name = st.text_input("商品名", value=initial_name)
-                # 型番の自動補完は難しいので、キーワード検索時は空欄にするか、商品名から推測する
-                # ここではシンプルに入力値を保持
                 default_model = ""
-                # もし型番検索モードの入力値が残っていればそれを使う工夫もできるが、今回はシンプルに
                 model_num = st.text_input("型番/管理コード", value=default_model, placeholder="手動入力")
-                
                 category = st.selectbox("種類", ["シングルカード", "未開封BOX", "サプライ", "その他"], index=["シングルカード", "未開封BOX", "サプライ", "その他"].index(default_category))
                 condition = st.selectbox("状態", ["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"], index=1)
                 psa_grade = st.selectbox("PSAグレード", ["未鑑定", "10", "9", "その他"], index=0)
@@ -429,7 +421,6 @@ if menu == "📦 在庫登録":
                 else: df = new_data
                 save_data(df)
                 
-                # 登録完了したら選択状態をクリア
                 st.session_state['selected_item'] = None
                 st.session_state['search_candidates'] = []
                 st.success(f"「{name}」を {quantity}個 登録しました！")
@@ -513,10 +504,7 @@ elif menu == "📊 在庫一覧・編集":
                         bar.progress((i + 1) / len(ids_to_update))
                         row = df[df['ID'] == rid].iloc[0]
                         
-                        # 更新時は一番上に出てきたものを採用（簡易的）
                         keyword = row['商品名']
-                        # 型番があればそれを優先したいが、今回は商品名で検索して1件目を取るロジックで統一
-                        # 既存ロジック維持
                         model_num = str(row['型番'])
                         search_key = ""
                         if "-BOX" in model_num and "BOX" in row['商品名']:
