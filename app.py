@@ -224,6 +224,9 @@ def check_and_init_sheets():
 
     return ws_inv, ws_pur, ws_sales
 
+# 【変更】キャッシュ機能を追加 (TTL: 60秒)
+# これにより、60秒間はGoogleにアクセスせず、メモリ内のデータを使います。
+@st.cache_data(ttl=60)
 def load_data():
     ws_inv, _, _ = check_and_init_sheets()
     if ws_inv:
@@ -266,6 +269,8 @@ def load_data():
     else:
         return pd.DataFrame(columns=['ID'])
 
+# 【変更】キャッシュ機能を追加
+@st.cache_data(ttl=60)
 def load_sales_data():
     _, _, ws_sales = check_and_init_sheets()
     if ws_sales:
@@ -301,12 +306,15 @@ def save_data(df):
         df_to_save = df_to_save[save_cols]
         ws_inv.clear()
         set_with_dataframe(ws_inv, df_to_save)
+        # 【重要】保存したらキャッシュをクリアして、次回は最新データを読み込むようにする
+        load_data.clear()
 
 def save_sales_data(df):
     _, _, ws_sales = check_and_init_sheets()
     if ws_sales:
         ws_sales.clear()
         set_with_dataframe(ws_sales, df)
+        load_sales_data.clear()
 
 def record_purchase(data_dict):
     _, ws_pur, _ = check_and_init_sheets()
@@ -322,6 +330,8 @@ def record_purchase(data_dict):
             datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         ]
         ws_pur.append_row(row)
+    # 仕入れ記録時もキャッシュを更新したほうが安全
+    load_data.clear()
 
 def record_sales(data_dict):
     _, _, ws_sales = check_and_init_sheets()
@@ -341,6 +351,7 @@ def record_sales(data_dict):
             datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         ]
         ws_sales.append_row(row)
+        load_sales_data.clear()
 
 # ---------------------------------------------------------
 # スクレイピング & クリーニング
@@ -715,7 +726,7 @@ elif menu == "📊 在庫一覧・編集":
     else: st.info("データがありません。")
 
 # ==========================================
-# 3. 売上履歴・取消機能 (New)
+# 3. 売上履歴・取消機能 (Updated with Cache)
 # ==========================================
 elif menu == "📖 売上履歴・取消":
     st.header("売上履歴 (取消)")
@@ -727,7 +738,6 @@ elif menu == "📖 売上履歴・取消":
         st.subheader("⚠️ 売却の取り消し")
         st.caption("間違えて売却登録した場合、ここから取り消し（在庫戻し）ができます。")
         
-        # 選択肢の作成
         sales_options = {}
         for idx, row in df_sales.iterrows():
             label = f"{row['売却日']} : {row['商品名']} ({int(row['売却数'])}個) - ¥{int(row['売却額'])}"
@@ -745,10 +755,8 @@ elif menu == "📖 売上履歴・取消":
                 
                 # 2. 在庫の復元
                 if not df.empty and item_id in df['ID'].values:
-                    # 在庫を増やす
                     current_stock = int(df.loc[df['ID'] == item_id, '在庫数'].values[0])
                     df.loc[df['ID'] == item_id, '在庫数'] = current_stock + qty_to_restore
-                    # ステータスを戻す
                     df.loc[df['ID'] == item_id, 'ステータス'] = '在庫あり'
                     save_data(df)
                 else:
