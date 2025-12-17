@@ -233,6 +233,7 @@ def load_data():
         except Exception:
             df = pd.DataFrame()
 
+        # 【変更】型番を削除
         if df.empty or 'ID' not in df.columns:
             required_cols = ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', 
                              '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数', '仕入れ先']
@@ -538,7 +539,7 @@ if menu == "📦 在庫登録":
                 st.success(f"「{name}」を登録し、仕入帳に記録しました！")
 
 # ==========================================
-# 2. 在庫一覧・編集画面 (UI改善版)
+# 2. 在庫一覧・編集画面 (Safe UI Version)
 # ==========================================
 elif menu == "📊 在庫一覧・編集":
     st.header("在庫リスト")
@@ -552,6 +553,7 @@ elif menu == "📊 在庫一覧・編集":
         
         search_query = st.text_input("🔍 在庫を検索", placeholder="商品名、PSA番号などで検索...")
         
+        # フィルタリング
         df_display = df.copy()
         if selected_categories:
             df_display = df_display[df_display['種類'].isin(selected_categories)]
@@ -559,7 +561,7 @@ elif menu == "📊 在庫一覧・編集":
             mask = df_display.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
             df_display = df_display[mask]
 
-        st.write("▼ 詳細・売却を行う商品を選択してください")
+        # セレクトボックス用辞書（IDを使用）
         select_options = {}
         for idx, row in df_display.iterrows():
             status_mark = "✅" if row.get('ステータス') == '売却済み' else "📦"
@@ -573,8 +575,9 @@ elif menu == "📊 在庫一覧・編集":
             placeholder="選択または入力..."
         )
 
-        df_display.insert(0, "削除", False)
-        
+        # 表示用データの加工
+        # 1. 必要な列を作成
+        df_display["削除"] = False
         def make_psa_url(num):
             if pd.notna(num) and str(num).strip() != "":
                 clean_num = re.sub(r'[^0-9]', '', str(num))
@@ -582,47 +585,58 @@ elif menu == "📊 在庫一覧・編集":
             return None
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
-        # 【改善】カラム設定: ラベル短縮 & 不要カラムの非表示
+        # 2. IDをインデックスに設定 (これでhide_index=TrueにすればID列は隠れるが、データは維持される)
+        df_display.set_index("ID", inplace=True)
+        
+        # 3. 表示したい列だけを絞り込む
+        visible_cols = ["削除", "商品名", "在庫数", "種類", "状態", "仕入れ値", "想定売値", "参考販売", "ステータス", "PSAリンク"]
+        # 存在しない列エラーを防ぐ
+        display_cols = [c for c in visible_cols if c in df_display.columns]
+        df_display_limited = df_display[display_cols]
+
+        # カラム設定 (hidden=Trueは使用しない)
         all_column_config = {
-            "削除": st.column_config.CheckboxColumn("削除", width="small", default=False),
-            "商品名": st.column_config.TextColumn("商品名", width="medium"),
-            "在庫数": st.column_config.NumberColumn("在庫", format="%d", width="small", min_value=0),
-            "種類": st.column_config.TextColumn("種類", width="small"),
-            "状態": st.column_config.SelectboxColumn("状態", width="small", options=["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"]),
-            "仕入れ値": st.column_config.NumberColumn("仕入", format="¥%d", width="small"),
-            "想定売値": st.column_config.NumberColumn("売値", format="¥%d", width="small"),
-            "参考販売": st.column_config.NumberColumn("相場", format="¥%d", width="small"),
-            "ステータス": st.column_config.SelectboxColumn("状況", width="small", options=["在庫あり", "出品中", "売却済み", "PSA提出中"], required=True),
-            "PSAリンク": st.column_config.LinkColumn("PSA", width="small", display_text="🔗"),
-            
-            # 以下、一覧では隠す列 (hidden=True)
-            "ID": st.column_config.TextColumn(hidden=True),
-            "PSAグレード": st.column_config.TextColumn(hidden=True),
-            "PSA番号": st.column_config.TextColumn(hidden=True),
-            "仕入れ日": st.column_config.TextColumn(hidden=True),
-            "参考買取": st.column_config.NumberColumn(hidden=True),
-            "保管場所": st.column_config.TextColumn(hidden=True),
-            "仕入れ先": st.column_config.TextColumn(hidden=True)
+             "削除": st.column_config.CheckboxColumn("削除", width="small", default=False),
+             "商品名": st.column_config.TextColumn("商品名", width="medium"),
+             "在庫数": st.column_config.NumberColumn("在庫", format="%d", width="small", min_value=0),
+             "種類": st.column_config.TextColumn("種類", width="small"),
+             "状態": st.column_config.SelectboxColumn("状態", width="small", options=["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"]),
+             "仕入れ値": st.column_config.NumberColumn("仕入", format="¥%d", width="small"),
+             "想定売値": st.column_config.NumberColumn("売値", format="¥%d", width="small"),
+             "参考販売": st.column_config.NumberColumn("相場", format="¥%d", width="small"),
+             "ステータス": st.column_config.SelectboxColumn("状況", width="small", options=["在庫あり", "出品中", "売却済み", "PSA提出中"], required=True),
+             "PSAリンク": st.column_config.LinkColumn("PSA", width="small", display_text="🔗")
         }
 
-        # 隠したい列も含めてDataFrame全体を渡すが、configで非表示制御する
+        # スマホモード
         if is_mobile_view:
-            # スマホモードは更に厳選
-            target_cols = ["削除", "商品名", "在庫数", "想定売値", "ステータス", "ID"] # IDは内部結合用に必要だがconfigで隠れる
-            df_display = df_display[[c for c in target_cols if c in df_display.columns]]
+            target_cols = ["削除", "商品名", "在庫数", "想定売値", "ステータス"]
+            df_display_limited = df_display_limited[[c for c in target_cols if c in df_display_limited.columns]]
             st.info("💡 スマホモード: 最小限の列のみ表示")
 
+        # データエディタ
         edited_df = st.data_editor(
-            df_display, num_rows="dynamic",
+            df_display_limited,
             column_config=all_column_config,
+            hide_index=True, # ここでID(index)を隠す
             key="inventory_editor",
-            hide_index=True,
             use_container_width=True
         )
 
+        # 保存処理 (IDインデックスを使ってマージ)
+        if not edited_df.empty:
+            # 変更があった場合、元のdfを更新
+            # 元のdfもIDをインデックスにしてupdateする
+            df_indexed = df.set_index("ID")
+            df_indexed.update(edited_df)
+            df = df_indexed.reset_index()
+            save_data(df)
+
+        # 詳細表示エリア (IDを使ってデータを取得)
         if selected_label:
             target_id = select_options[selected_label]
-            target_row = edited_df[edited_df['ID'] == target_id]
+            # 編集後のデータではなく、最新のdfからデータを取る
+            target_row = df[df['ID'] == target_id]
             
             if not target_row.empty:
                 row_data = target_row.iloc[0]
@@ -634,7 +648,6 @@ elif menu == "📊 在庫一覧・編集":
                 st.divider()
                 st.markdown(f"### 🔍 詳細: **{raw_name}**")
                 
-                # 詳細情報の補足表示（一覧で隠した情報）
                 with st.expander("ℹ️ 詳細データ (ID, 仕入れ情報など)", expanded=False):
                     d1, d2, d3 = st.columns(3)
                     d1.write(f"**ID:** `{row_data['ID']}`")
@@ -703,7 +716,8 @@ elif menu == "📊 在庫一覧・編集":
         with col_act1:
             if st.button("🗑️ チェックした項目を削除", use_container_width=True):
                 if '削除' in edited_df.columns:
-                    ids_to_delete = edited_df[edited_df['削除']]['ID'].tolist()
+                    # edited_dfのインデックスはIDなので、インデックスを取得
+                    ids_to_delete = edited_df[edited_df['削除']].index.tolist()
                     if ids_to_delete:
                         df_new = df[~df['ID'].isin(ids_to_delete)]
                         save_data(df_new)
@@ -712,13 +726,14 @@ elif menu == "📊 在庫一覧・編集":
                     else: st.info("削除チェックがありません。")
         with col_act2:
             if st.button("🔄 表示中の販売価格を更新", use_container_width=True):
-                ids_to_update = df_display['ID'].tolist()
+                ids_to_update = df_display.index.tolist()
                 if not ids_to_update: st.warning("データがありません。")
                 else:
                     bar = st.progress(0); txt = st.empty()
                     for i, rid in enumerate(ids_to_update):
                         txt.text(f"更新中... ({i+1}/{len(ids_to_update)})")
                         bar.progress((i + 1) / len(ids_to_update))
+                        # IDで元データから検索
                         row = df[df['ID'] == rid].iloc[0]
                         keyword = row['商品名']
                         try:
@@ -730,15 +745,6 @@ elif menu == "📊 在庫一覧・編集":
                     save_data(df)
                     txt.text("完了！"); time.sleep(1); st.rerun()
 
-        cols_to_save = [c for c in edited_df.columns if c not in ['削除', 'PSAリンク']]
-        edited_content = edited_df[cols_to_save]
-        
-        if not edited_content.empty:
-            df.set_index('ID', inplace=True)
-            edited_content.set_index('ID', inplace=True)
-            df.update(edited_content)
-            df.reset_index(inplace=True)
-            save_data(df)
     else: st.info("データがありません。")
 
 # ==========================================
