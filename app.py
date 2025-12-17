@@ -233,7 +233,6 @@ def load_data():
         except Exception:
             df = pd.DataFrame()
 
-        # 【変更】型番を削除
         if df.empty or 'ID' not in df.columns:
             required_cols = ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', 
                              '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数', '仕入れ先']
@@ -288,7 +287,6 @@ def load_sales_data():
 def save_data(df):
     ws_inv, _, _ = check_and_init_sheets()
     if ws_inv:
-        # 【変更】型番を削除
         save_cols = ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', 
                      '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数', '仕入れ先']
         
@@ -492,7 +490,6 @@ if menu == "📦 在庫登録":
         with st.form("register_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
-                # 【変更】型番入力を削除
                 name = st.text_input("商品名", value=initial_name)
                 category = st.selectbox("種類", ["シングルカード", "未開封BOX", "サプライ", "その他"], index=["シングルカード", "未開封BOX", "サプライ", "その他"].index(default_category))
                 condition = st.selectbox("状態", ["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"], index=1)
@@ -517,7 +514,6 @@ if menu == "📦 在庫登録":
                 new_id = str(uuid.uuid4())[:8]
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
-                # 【変更】型番を削除
                 new_data = pd.DataFrame({
                     'ID': [new_id], '商品名': [name],
                     '種類': [category], '状態': [condition], 'PSAグレード': [psa_grade],
@@ -542,7 +538,7 @@ if menu == "📦 在庫登録":
                 st.success(f"「{name}」を登録し、仕入帳に記録しました！")
 
 # ==========================================
-# 2. 在庫一覧・編集画面
+# 2. 在庫一覧・編集画面 (UI改善版)
 # ==========================================
 elif menu == "📊 在庫一覧・編集":
     st.header("在庫リスト")
@@ -554,7 +550,7 @@ elif menu == "📊 在庫一覧・編集":
             all_categories = list(df['種類'].unique()) if '種類' in df.columns else []
             selected_categories = st.multiselect("📂 種類で絞り込み (未選択で全表示)", all_categories, default=[])
         
-        search_query = st.text_input("🔍 在庫を検索", placeholder="商品名、PSA番号、型番などで検索...")
+        search_query = st.text_input("🔍 在庫を検索", placeholder="商品名、PSA番号などで検索...")
         
         df_display = df.copy()
         if selected_categories:
@@ -586,22 +582,35 @@ elif menu == "📊 在庫一覧・編集":
             return None
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
+        # 【改善】カラム設定: ラベル短縮 & 不要カラムの非表示
         all_column_config = {
-            "削除": st.column_config.CheckboxColumn("削除", default=False),
-            "在庫数": st.column_config.NumberColumn("在庫数", format="%d個", min_value=0),
-            "仕入れ値": st.column_config.NumberColumn(format="¥%d"),
-            "想定売値": st.column_config.NumberColumn(format="¥%d"),
-            "参考販売": st.column_config.NumberColumn(format="¥%d"),
-            "参考買取": st.column_config.NumberColumn(format="¥%d"),
-            "PSA番号": st.column_config.TextColumn(help="8桁の証明番号"),
-            "PSAリンク": st.column_config.LinkColumn("PSA確認", display_text="証明書"),
-            "ステータス": st.column_config.SelectboxColumn(options=["在庫あり", "出品中", "売却済み", "PSA提出中"], required=True)
+            "削除": st.column_config.CheckboxColumn("削除", width="small", default=False),
+            "商品名": st.column_config.TextColumn("商品名", width="medium"),
+            "在庫数": st.column_config.NumberColumn("在庫", format="%d", width="small", min_value=0),
+            "種類": st.column_config.TextColumn("種類", width="small"),
+            "状態": st.column_config.SelectboxColumn("状態", width="small", options=["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"]),
+            "仕入れ値": st.column_config.NumberColumn("仕入", format="¥%d", width="small"),
+            "想定売値": st.column_config.NumberColumn("売値", format="¥%d", width="small"),
+            "参考販売": st.column_config.NumberColumn("相場", format="¥%d", width="small"),
+            "ステータス": st.column_config.SelectboxColumn("状況", width="small", options=["在庫あり", "出品中", "売却済み", "PSA提出中"], required=True),
+            "PSAリンク": st.column_config.LinkColumn("PSA", width="small", display_text="🔗"),
+            
+            # 以下、一覧では隠す列 (hidden=True)
+            "ID": st.column_config.TextColumn(hidden=True),
+            "PSAグレード": st.column_config.TextColumn(hidden=True),
+            "PSA番号": st.column_config.TextColumn(hidden=True),
+            "仕入れ日": st.column_config.TextColumn(hidden=True),
+            "参考買取": st.column_config.NumberColumn(hidden=True),
+            "保管場所": st.column_config.TextColumn(hidden=True),
+            "仕入れ先": st.column_config.TextColumn(hidden=True)
         }
 
+        # 隠したい列も含めてDataFrame全体を渡すが、configで非表示制御する
         if is_mobile_view:
-            target_cols = ["削除", "商品名", "在庫数", "ステータス", "想定売値", "PSAリンク", "ID"]
+            # スマホモードは更に厳選
+            target_cols = ["削除", "商品名", "在庫数", "想定売値", "ステータス", "ID"] # IDは内部結合用に必要だがconfigで隠れる
             df_display = df_display[[c for c in target_cols if c in df_display.columns]]
-            st.info("💡 スマホモード: 重要な列のみ表示しています。")
+            st.info("💡 スマホモード: 最小限の列のみ表示")
 
         edited_df = st.data_editor(
             df_display, num_rows="dynamic",
@@ -623,8 +632,18 @@ elif menu == "📊 在庫一覧・編集":
                 current_qty = int(row_data['在庫数'])
                 
                 st.divider()
-                st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
+                st.markdown(f"### 🔍 詳細: **{raw_name}**")
                 
+                # 詳細情報の補足表示（一覧で隠した情報）
+                with st.expander("ℹ️ 詳細データ (ID, 仕入れ情報など)", expanded=False):
+                    d1, d2, d3 = st.columns(3)
+                    d1.write(f"**ID:** `{row_data['ID']}`")
+                    d1.write(f"**保管:** {row_data.get('保管場所', '-')}")
+                    d2.write(f"**仕入日:** {row_data.get('仕入れ日', '-')}")
+                    d2.write(f"**仕入先:** {row_data.get('仕入れ先', '-')}")
+                    if pd.notna(row_data.get('PSA番号')) and row_data.get('PSA番号'):
+                        d3.write(f"**PSA:** {row_data['PSA番号']} (Gr.{row_data.get('PSAグレード','-')})")
+
                 if current_status != "売却済み":
                     with st.expander("💰 売却登録 (ここを開いて売上確定)", expanded=False):
                         with st.form("sales_form"):
