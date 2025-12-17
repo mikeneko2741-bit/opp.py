@@ -224,8 +224,6 @@ def check_and_init_sheets():
 
     return ws_inv, ws_pur, ws_sales
 
-# 【変更】キャッシュ機能を追加 (TTL: 60秒)
-# これにより、60秒間はGoogleにアクセスせず、メモリ内のデータを使います。
 @st.cache_data(ttl=60)
 def load_data():
     ws_inv, _, _ = check_and_init_sheets()
@@ -235,8 +233,9 @@ def load_data():
         except Exception:
             df = pd.DataFrame()
 
+        # 【変更】型番を削除
         if df.empty or 'ID' not in df.columns:
-            required_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
+            required_cols = ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', 
                              '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数', '仕入れ先']
             df_fresh = pd.DataFrame(columns=required_cols)
             if df.empty:
@@ -246,14 +245,14 @@ def load_data():
         df = df.dropna(subset=['ID'])
         df = df[df['ID'] != '']
         
-        required_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
+        required_cols = ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', 
                          '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数', '仕入れ先']
         
         for col in required_cols:
             if col not in df.columns:
                 df[col] = ""
 
-        str_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', '保管場所', 'ステータス', 'PSA番号', '仕入れ先']
+        str_cols = ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', '保管場所', 'ステータス', 'PSA番号', '仕入れ先']
         for col in str_cols:
             df[col] = df[col].astype(str).replace('nan', '').replace('None', '')
             if col == 'PSA番号':
@@ -269,7 +268,6 @@ def load_data():
     else:
         return pd.DataFrame(columns=['ID'])
 
-# 【変更】キャッシュ機能を追加
 @st.cache_data(ttl=60)
 def load_sales_data():
     _, _, ws_sales = check_and_init_sheets()
@@ -290,7 +288,8 @@ def load_sales_data():
 def save_data(df):
     ws_inv, _, _ = check_and_init_sheets()
     if ws_inv:
-        save_cols = ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', 
+        # 【変更】型番を削除
+        save_cols = ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', 
                      '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数', '仕入れ先']
         
         df_to_save = df.copy()
@@ -298,7 +297,7 @@ def save_data(df):
             if col not in df_to_save.columns:
                 df_to_save[col] = ""
         
-        for col in ['ID', '商品名', '型番', '種類', '状態', 'PSAグレード', '仕入れ日', '保管場所', 'ステータス', 'PSA番号', '仕入れ先']:
+        for col in ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', '保管場所', 'ステータス', 'PSA番号', '仕入れ先']:
             df_to_save[col] = df_to_save[col].astype(str).replace('nan', '')
         
         df_to_save['在庫数'] = df_to_save['在庫数'].fillna(1).astype(int)
@@ -306,7 +305,6 @@ def save_data(df):
         df_to_save = df_to_save[save_cols]
         ws_inv.clear()
         set_with_dataframe(ws_inv, df_to_save)
-        # 【重要】保存したらキャッシュをクリアして、次回は最新データを読み込むようにする
         load_data.clear()
 
 def save_sales_data(df):
@@ -330,7 +328,6 @@ def record_purchase(data_dict):
             datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         ]
         ws_pur.append_row(row)
-    # 仕入れ記録時もキャッシュを更新したほうが安全
     load_data.clear()
 
 def record_sales(data_dict):
@@ -495,9 +492,8 @@ if menu == "📦 在庫登録":
         with st.form("register_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
+                # 【変更】型番入力を削除
                 name = st.text_input("商品名", value=initial_name)
-                default_model = ""
-                model_num = st.text_input("型番/管理コード", value=default_model, placeholder="手動入力")
                 category = st.selectbox("種類", ["シングルカード", "未開封BOX", "サプライ", "その他"], index=["シングルカード", "未開封BOX", "サプライ", "その他"].index(default_category))
                 condition = st.selectbox("状態", ["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"], index=1)
                 psa_grade = st.selectbox("PSAグレード", ["未鑑定", "10", "9", "その他"], index=0)
@@ -521,8 +517,9 @@ if menu == "📦 在庫登録":
                 new_id = str(uuid.uuid4())[:8]
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
+                # 【変更】型番を削除
                 new_data = pd.DataFrame({
-                    'ID': [new_id], '商品名': [name], '型番': [model_num],
+                    'ID': [new_id], '商品名': [name],
                     '種類': [category], '状態': [condition], 'PSAグレード': [psa_grade],
                     '仕入れ日': [purchase_date],
                     '仕入れ値': [cost], '想定売値': [target_price], '参考販売': [ref_sales], '参考買取': [ref_buyback], 
@@ -726,7 +723,7 @@ elif menu == "📊 在庫一覧・編集":
     else: st.info("データがありません。")
 
 # ==========================================
-# 3. 売上履歴・取消機能 (Updated with Cache)
+# 3. 売上履歴・取消機能
 # ==========================================
 elif menu == "📖 売上履歴・取消":
     st.header("売上履歴 (取消)")
