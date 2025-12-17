@@ -220,7 +220,6 @@ def check_and_init_sheets():
         ws_sales = sh.worksheet(SHEET_SALES)
     except:
         ws_sales = sh.add_worksheet(title=SHEET_SALES, rows=1000, cols=10)
-        # 【変更】売却数を追加
         ws_sales.append_row(['ID', '商品名', '売却日', '売却額', '売却数', '利益', '売却先', '備考', '登録日時'])
 
     return ws_inv, ws_pur, ws_sales
@@ -267,6 +266,22 @@ def load_data():
     else:
         return pd.DataFrame(columns=['ID'])
 
+def load_sales_data():
+    _, _, ws_sales = check_and_init_sheets()
+    if ws_sales:
+        try:
+            df = get_as_dataframe(ws_sales, evaluate_formulas=True)
+            if df.empty or 'ID' not in df.columns:
+                return pd.DataFrame(columns=['ID', '商品名', '売却日', '売却額', '売却数', '利益', '売却先', '備考', '登録日時'])
+            
+            df = df.dropna(subset=['ID'])
+            df['売却額'] = pd.to_numeric(df['売却額'], errors='coerce').fillna(0)
+            df['売却数'] = pd.to_numeric(df['売却数'], errors='coerce').fillna(1)
+            return df
+        except:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
 def save_data(df):
     ws_inv, _, _ = check_and_init_sheets()
     if ws_inv:
@@ -287,6 +302,12 @@ def save_data(df):
         ws_inv.clear()
         set_with_dataframe(ws_inv, df_to_save)
 
+def save_sales_data(df):
+    _, _, ws_sales = check_and_init_sheets()
+    if ws_sales:
+        ws_sales.clear()
+        set_with_dataframe(ws_sales, df)
+
 def record_purchase(data_dict):
     _, ws_pur, _ = check_and_init_sheets()
     if ws_pur:
@@ -305,7 +326,6 @@ def record_purchase(data_dict):
 def record_sales(data_dict):
     _, _, ws_sales = check_and_init_sheets()
     if ws_sales:
-        # 利益 = 売却額 - (単価 * 個数)
         total_cost = data_dict.get('仕入れ値', 0) * data_dict.get('売却数', 1)
         profit = data_dict.get('売却額', 0) - total_cost
         
@@ -314,7 +334,7 @@ def record_sales(data_dict):
             data_dict.get('商品名'),
             data_dict.get('売却日'),
             data_dict.get('売却額'),
-            data_dict.get('売却数'), # 追加
+            data_dict.get('売却数'),
             profit,
             data_dict.get('売却先'),
             data_dict.get('備考', ''),
@@ -384,7 +404,7 @@ st.set_page_config(page_title="ポケカ在庫管理", layout="wide")
 st.title("🎴 ポケカ在庫・収支管理システム (Cloud版)")
 
 df = load_data()
-menu = st.sidebar.radio("メニュー", ["📦 在庫登録", "📊 在庫一覧・編集", "💰 収支分析"])
+menu = st.sidebar.radio("メニュー", ["📦 在庫登録", "📊 在庫一覧・編集", "📖 売上履歴・取消", "💰 収支分析"])
 
 # ==========================================
 # 1. 在庫登録画面
@@ -597,13 +617,11 @@ elif menu == "📊 在庫一覧・編集":
                 st.divider()
                 st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
                 
-                # 売却フォーム (未売却の場合のみ表示)
                 if current_status != "売却済み":
                     with st.expander("💰 売却登録 (ここを開いて売上確定)", expanded=False):
                         with st.form("sales_form"):
                             c_s1, c_s2 = st.columns(2)
                             with c_s1:
-                                # 【変更】売却数の入力（最大値は現在の在庫数）
                                 sold_qty = st.number_input("売却数", min_value=1, max_value=current_qty, value=1, step=1)
                                 sales_price = st.number_input("売却額 (合計金額)", min_value=0, value=int(row_data['想定売値']) * sold_qty, step=100, help="1個あたりではなく、今回の取引の合計金額を入れてください")
                                 sales_date = st.date_input("売却日", datetime.now())
@@ -612,7 +630,6 @@ elif menu == "📊 在庫一覧・編集":
                                 sales_note = st.text_input("売却備考", placeholder="購入者名など(任意)")
                             
                             if st.form_submit_button("売却を確定する", type="primary", use_container_width=True):
-                                # 売上記録作成
                                 sales_record = {
                                     'ID': target_id, '商品名': raw_name,
                                     '売却日': str(sales_date), '売却額': sales_price,
@@ -621,7 +638,6 @@ elif menu == "📊 在庫一覧・編集":
                                 }
                                 record_sales(sales_record)
                                 
-                                # 在庫数の更新ロジック
                                 new_qty = current_qty - sold_qty
                                 if new_qty > 0:
                                     df.loc[df['ID'] == target_id, '在庫数'] = new_qty
@@ -699,7 +715,57 @@ elif menu == "📊 在庫一覧・編集":
     else: st.info("データがありません。")
 
 # ==========================================
-# 3. 収支分析画面
+# 3. 売上履歴・取消機能 (New)
+# ==========================================
+elif menu == "📖 売上履歴・取消":
+    st.header("売上履歴 (取消)")
+    df_sales = load_sales_data()
+    
+    if not df_sales.empty:
+        st.dataframe(df_sales, use_container_width=True)
+        st.divider()
+        st.subheader("⚠️ 売却の取り消し")
+        st.caption("間違えて売却登録した場合、ここから取り消し（在庫戻し）ができます。")
+        
+        # 選択肢の作成
+        sales_options = {}
+        for idx, row in df_sales.iterrows():
+            label = f"{row['売却日']} : {row['商品名']} ({int(row['売却数'])}個) - ¥{int(row['売却額'])}"
+            sales_options[label] = idx
+            
+        selected_sale_label = st.selectbox("取り消す取引を選択", list(sales_options.keys()), index=None, placeholder="取引を選択...")
+        
+        if selected_sale_label:
+            target_idx = sales_options[selected_sale_label]
+            if st.button("この売却を取り消す (在庫を戻す)", type="primary"):
+                # 1. データの特定
+                sale_row = df_sales.loc[target_idx]
+                item_id = sale_row['ID']
+                qty_to_restore = int(sale_row['売却数'])
+                
+                # 2. 在庫の復元
+                if not df.empty and item_id in df['ID'].values:
+                    # 在庫を増やす
+                    current_stock = int(df.loc[df['ID'] == item_id, '在庫数'].values[0])
+                    df.loc[df['ID'] == item_id, '在庫数'] = current_stock + qty_to_restore
+                    # ステータスを戻す
+                    df.loc[df['ID'] == item_id, 'ステータス'] = '在庫あり'
+                    save_data(df)
+                else:
+                    st.warning("在庫データが見つかりませんでした。売上記録の削除のみ行います。")
+
+                # 3. 売上帳から削除
+                df_sales_new = df_sales.drop(target_idx)
+                save_sales_data(df_sales_new)
+                
+                st.success("売却を取り消しました！在庫数が元に戻りました。")
+                time.sleep(2)
+                st.rerun()
+    else:
+        st.info("まだ売上記録がありません。")
+
+# ==========================================
+# 4. 収支分析画面
 # ==========================================
 elif menu == "💰 収支分析":
     st.header("資産状況ダッシュボード")
