@@ -19,9 +19,9 @@ JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ポケカ在庫管理DB'
 
 # シート名の定義
-SHEET_INVENTORY = 'ポケカ在庫管理DB' # メイン在庫
-SHEET_PURCHASE = '仕入帳'          # 新規追加
-SHEET_SALES = '売上帳'             # 新規追加
+SHEET_INVENTORY = 'ポケカ在庫管理DB'
+SHEET_PURCHASE = '仕入帳'
+SHEET_SALES = '売上帳'
 
 EXPANSION_LIST = {
     "--- MEGAシリーズ (2025~) ---": "",
@@ -201,32 +201,27 @@ def get_spreadsheet():
             return None
     return None
 
-# シート初期化・取得関数（3つのシートを管理）
 def check_and_init_sheets():
     sh = get_spreadsheet()
     if not sh: return None, None, None
 
-    # メイン在庫シート
     try:
         ws_inv = sh.worksheet(SHEET_INVENTORY)
     except:
         ws_inv = sh.add_worksheet(title=SHEET_INVENTORY, rows=1000, cols=20)
     
-    # 仕入帳シート
     try:
         ws_pur = sh.worksheet(SHEET_PURCHASE)
     except:
         ws_pur = sh.add_worksheet(title=SHEET_PURCHASE, rows=1000, cols=10)
-        # ヘッダー作成
         ws_pur.append_row(['ID', '商品名', '仕入れ日', '仕入れ値', '仕入れ先', '備考', 'ステータス', '登録日時'])
 
-    # 売上帳シート
     try:
         ws_sales = sh.worksheet(SHEET_SALES)
     except:
         ws_sales = sh.add_worksheet(title=SHEET_SALES, rows=1000, cols=10)
-        # ヘッダー作成
-        ws_sales.append_row(['ID', '商品名', '売却日', '売却額', '利益', '売却先', '備考', '登録日時'])
+        # 【変更】売却数を追加
+        ws_sales.append_row(['ID', '商品名', '売却日', '売却額', '売却数', '利益', '売却先', '備考', '登録日時'])
 
     return ws_inv, ws_pur, ws_sales
 
@@ -292,7 +287,6 @@ def save_data(df):
         ws_inv.clear()
         set_with_dataframe(ws_inv, df_to_save)
 
-# 仕入帳への記録
 def record_purchase(data_dict):
     _, ws_pur, _ = check_and_init_sheets()
     if ws_pur:
@@ -308,16 +302,19 @@ def record_purchase(data_dict):
         ]
         ws_pur.append_row(row)
 
-# 売上帳への記録
 def record_sales(data_dict):
     _, _, ws_sales = check_and_init_sheets()
     if ws_sales:
-        profit = data_dict.get('売却額', 0) - data_dict.get('仕入れ値', 0)
+        # 利益 = 売却額 - (単価 * 個数)
+        total_cost = data_dict.get('仕入れ値', 0) * data_dict.get('売却数', 1)
+        profit = data_dict.get('売却額', 0) - total_cost
+        
         row = [
             data_dict.get('ID'),
             data_dict.get('商品名'),
             data_dict.get('売却日'),
             data_dict.get('売却額'),
+            data_dict.get('売却数'), # 追加
             profit,
             data_dict.get('売却先'),
             data_dict.get('備考', ''),
@@ -374,9 +371,7 @@ def search_card_rush(keyword):
 
 def clean_product_name(text):
     if not isinstance(text, str): return str(text)
-    # 先頭の【...】等を削除
     text = re.sub(r'^[【\[\(\{（〔].*?[】\]\)\}）〕]', '', text).strip()
-    # 最初の区切り文字で分割
     split_chars = r'[ 　\[\(\{【（〔]'
     match = re.split(split_chars, text, 1)
     if match: return match[0].strip()
@@ -392,7 +387,7 @@ df = load_data()
 menu = st.sidebar.radio("メニュー", ["📦 在庫登録", "📊 在庫一覧・編集", "💰 収支分析"])
 
 # ==========================================
-# 1. 在庫登録画面 (Update: 仕入れ記録対応)
+# 1. 在庫登録画面
 # ==========================================
 if menu == "📦 在庫登録":
     st.header("新規在庫の登録 (古物台帳対応)")
@@ -477,7 +472,6 @@ if menu == "📦 在庫登録":
                 psa_grade = st.selectbox("PSAグレード", ["未鑑定", "10", "9", "その他"], index=0)
                 psa_num = st.text_input("PSA証明番号 (Cert #)", placeholder="例: 12345678")
             with col2:
-                # 【追加】仕入れ情報の入力
                 st.markdown("##### 📥 仕入れ情報 (古物台帳)")
                 source = st.selectbox("仕入れ先区分", ["カードショップ", "メルカリ・フリマ", "個人買取", "自引き(パック開封)", "その他"])
                 purchase_note = st.text_input("仕入れ備考 (相手方情報など)", placeholder="例: 秋葉原店、ユーザー名など")
@@ -496,7 +490,6 @@ if menu == "📦 在庫登録":
                 new_id = str(uuid.uuid4())[:8]
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
-                # 1. 在庫データ
                 new_data = pd.DataFrame({
                     'ID': [new_id], '商品名': [name], '型番': [model_num],
                     '種類': [category], '状態': [condition], 'PSAグレード': [psa_grade],
@@ -506,24 +499,22 @@ if menu == "📦 在庫登録":
                     '在庫数': [quantity], '仕入れ先': [source]
                 })
                 
-                # 2. 仕入れ記録データ
                 purchase_record = {
                     'ID': new_id, '商品名': name, '仕入れ日': purchase_date,
                     '仕入れ値': cost, '仕入れ先': source, '備考': purchase_note
                 }
                 
-                # 保存処理
                 if not df.empty: df = pd.concat([df, new_data], ignore_index=True)
                 else: df = new_data
-                save_data(df) # 在庫DB更新
-                record_purchase(purchase_record) # 仕入帳更新
+                save_data(df)
+                record_purchase(purchase_record)
                 
                 st.session_state['selected_item'] = None
                 st.session_state['search_candidates'] = []
                 st.success(f"「{name}」を登録し、仕入帳に記録しました！")
 
 # ==========================================
-# 2. 在庫一覧・編集画面 (Update: 売却機能)
+# 2. 在庫一覧・編集画面
 # ==========================================
 elif menu == "📊 在庫一覧・編集":
     st.header("在庫リスト")
@@ -601,6 +592,7 @@ elif menu == "📊 在庫一覧・編集":
                 raw_name = row_data['商品名']
                 clean_name = clean_product_name(raw_name)
                 current_status = row_data['ステータス']
+                current_qty = int(row_data['在庫数'])
                 
                 st.divider()
                 st.markdown(f"### 🔍 詳細アクション: **{raw_name}**")
@@ -609,10 +601,11 @@ elif menu == "📊 在庫一覧・編集":
                 if current_status != "売却済み":
                     with st.expander("💰 売却登録 (ここを開いて売上確定)", expanded=False):
                         with st.form("sales_form"):
-                            st.caption("売却情報を入力して確定すると、売上帳に記録され、在庫ステータスが「売却済み」になります。")
                             c_s1, c_s2 = st.columns(2)
                             with c_s1:
-                                sales_price = st.number_input("売却額 (実際に売れた金額)", min_value=0, value=int(row_data['想定売値']), step=100)
+                                # 【変更】売却数の入力（最大値は現在の在庫数）
+                                sold_qty = st.number_input("売却数", min_value=1, max_value=current_qty, value=1, step=1)
+                                sales_price = st.number_input("売却額 (合計金額)", min_value=0, value=int(row_data['想定売値']) * sold_qty, step=100, help="1個あたりではなく、今回の取引の合計金額を入れてください")
                                 sales_date = st.date_input("売却日", datetime.now())
                             with c_s2:
                                 sales_dest = st.selectbox("売却先", ["メルカリ", "Yahoo!フリマ", "Clove", "店舗買取", "対面", "その他"])
@@ -623,15 +616,24 @@ elif menu == "📊 在庫一覧・編集":
                                 sales_record = {
                                     'ID': target_id, '商品名': raw_name,
                                     '売却日': str(sales_date), '売却額': sales_price,
+                                    '売却数': sold_qty,
                                     '仕入れ値': row_data['仕入れ値'], '売却先': sales_dest, '備考': sales_note
                                 }
-                                # 売上帳へ記録
                                 record_sales(sales_record)
-                                # 在庫ステータス更新
-                                df.loc[df['ID'] == target_id, 'ステータス'] = '売却済み'
+                                
+                                # 在庫数の更新ロジック
+                                new_qty = current_qty - sold_qty
+                                if new_qty > 0:
+                                    df.loc[df['ID'] == target_id, '在庫数'] = new_qty
+                                    msg = f"✅ {sold_qty}個売却しました。残り在庫: {new_qty}個"
+                                else:
+                                    df.loc[df['ID'] == target_id, '在庫数'] = 0
+                                    df.loc[df['ID'] == target_id, 'ステータス'] = '売却済み'
+                                    msg = f"🎉 全て売却しました！ステータスを「売却済み」に更新しました。"
+                                
                                 save_data(df)
-                                st.success("🎉 売却処理が完了しました！売上帳に記録されました。")
-                                time.sleep(1)
+                                st.success(msg)
+                                time.sleep(2)
                                 st.rerun()
                 else:
                     st.success("✅ この商品は既に「売却済み」です。")
