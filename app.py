@@ -328,6 +328,19 @@ def record_purchase(data_dict):
         ws_pur.append_row(row)
     load_data.clear()
 
+# 【追加】仕入帳から直近の記録を削除する関数
+def undo_purchase_record(target_id):
+    _, ws_pur, _ = check_and_init_sheets()
+    if ws_pur:
+        # 全データを取得して、後ろから検索
+        all_values = ws_pur.get_all_values()
+        # ヘッダーを除いて後ろから走査
+        for i in range(len(all_values) - 1, 0, -1):
+            if all_values[i][0] == str(target_id): # ID列が一致したら
+                ws_pur.delete_rows(i + 1) # gspreadは1-indexed
+                break
+    load_data.clear()
+
 def record_sales(data_dict):
     _, _, ws_sales = check_and_init_sheets()
     if ws_sales:
@@ -413,13 +426,12 @@ df = load_data()
 menu = st.sidebar.radio("メニュー", ["📦 在庫登録", "📊 在庫一覧・編集", "📖 売上履歴・取消", "💰 収支分析"])
 
 # ==========================================
-# 1. 在庫登録画面 (Update: バルク登録モード)
+# 1. 在庫登録画面 (Update: バルク登録 & Undo機能)
 # ==========================================
 if menu == "📦 在庫登録":
     st.header("新規在庫の登録 (古物台帳対応)")
     
     with st.expander("➕ 新規在庫を登録する (ここをタップして開閉)", expanded=True):
-        # 【追加】登録モードに「素材」を追加
         reg_mode = st.radio("登録モード", ["🃏 シングルカード", "📦 未開封BOX", "🗃️ 素材(SR/AR等)"], horizontal=True)
         
         if reg_mode == "🗃️ 素材(SR/AR等)":
@@ -428,7 +440,6 @@ if menu == "📦 在庫登録":
             selected_bulk_name = st.selectbox("素材の種類を選択", bulk_options)
             initial_name = selected_bulk_name
             initial_sales = 0
-            # 素材の場合は検索機能をスキップ
         else:
             st.subheader("① 商品検索 (販売価格)")
             search_tab1, search_tab2 = st.tabs(["🔢 型番/パックで検索", "🔤 キーワード検索"])
@@ -503,7 +514,6 @@ if menu == "📦 在庫登録":
             col1, col2 = st.columns(2)
             with col1:
                 name = st.text_input("商品名", value=initial_name)
-                # カテゴリ選択肢に「素材・バルク」を追加
                 category = st.selectbox("種類", ["シングルカード", "未開封BOX", "素材・バルク", "サプライ", "その他"], index=["シングルカード", "未開封BOX", "素材・バルク", "サプライ", "その他"].index(default_category))
                 
                 if reg_mode == "🗃️ 素材(SR/AR等)":
@@ -540,38 +550,43 @@ if menu == "📦 在庫登録":
             if submitted and name:
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
-                # 【追加機能】既存の素材があるかチェックし、あれば平均単価更新＆合算
+                # Undo用の一時保存データを作成
+                undo_info = {}
+
                 existing_item_idx = None
                 if not df.empty and category == "素材・バルク":
-                    # 同名の素材を探す
                     matches = df[df['商品名'] == name]
                     if not matches.empty:
-                        # 既存データが見つかった場合
+                        # 既存データが見つかった場合（追記モード）
                         existing_item_idx = matches.index[0]
                         existing_row = matches.iloc[0]
                         
-                        # 平均単価計算: (既存総額 + 今回総額) / 合計個数
                         current_qty = int(existing_row['在庫数'])
                         current_cost = float(existing_row['仕入れ値'])
                         
+                        # Undo用に変更前の値を保存
+                        undo_info = {
+                            'type': 'update',
+                            'id': existing_row['ID'],
+                            'prev_qty': current_qty,
+                            'prev_cost': current_cost
+                        }
+
                         total_qty = current_qty + quantity
                         total_val = (current_qty * current_cost) + (quantity * cost)
                         new_avg_cost = int(total_val / total_qty)
                         
-                        # データ更新
                         df.at[existing_item_idx, '在庫数'] = total_qty
                         df.at[existing_item_idx, '仕入れ値'] = new_avg_cost
-                        df.at[existing_item_idx, '仕入れ日'] = purchase_date # 最新仕入れ日に更新
+                        df.at[existing_item_idx, '仕入れ日'] = purchase_date
                         
-                        # IDは既存のものを使用
                         target_id = existing_row['ID']
-                        
                         st.success(f"既存の「{name}」に{quantity}枚追加しました。平均単価: ¥{current_cost} → ¥{new_avg_cost}")
                     else:
                         existing_item_idx = None
 
-                # 新規登録の場合 (既存が見つからなかった場合)
                 if existing_item_idx is None:
+                    # 新規登録モード
                     new_id = str(uuid.uuid4())[:8]
                     new_data = pd.DataFrame({
                         'ID': [new_id], '商品名': [name],
@@ -584,9 +599,14 @@ if menu == "📦 在庫登録":
                     if not df.empty: df = pd.concat([df, new_data], ignore_index=True)
                     else: df = new_data
                     target_id = new_id
+                    
+                    # Undo用にIDを保存
+                    undo_info = {
+                        'type': 'new',
+                        'id': new_id
+                    }
                     st.success(f"「{name}」を新規登録しました！")
 
-                # どちらの場合でも保存と仕入れ記録
                 save_data(df)
                 
                 purchase_record = {
@@ -595,8 +615,48 @@ if menu == "📦 在庫登録":
                 }
                 record_purchase(purchase_record)
                 
+                # Undo情報をセッションに保存
+                st.session_state['undo_info'] = undo_info
+                
                 st.session_state['selected_item'] = None
                 st.session_state['search_candidates'] = []
+
+    # 【追加】Undoボタンの表示
+    if 'undo_info' in st.session_state and st.session_state['undo_info']:
+        st.divider()
+        st.warning("⚠️ 間違えましたか？")
+        if st.button("↩️ 直前の登録を取り消す (Undo)", type="primary"):
+            undo_data = st.session_state['undo_info']
+            target_id = undo_data['id']
+            
+            # DB再読み込みして最新状態を取得
+            df_latest = load_data()
+            
+            if undo_data['type'] == 'new':
+                # 新規登録を取り消す -> 行削除
+                df_restored = df_latest[df_latest['ID'] != target_id]
+                save_data(df_restored)
+                msg = "✅ 直前の新規登録を取り消しました（データを削除しました）。"
+            
+            elif undo_data['type'] == 'update':
+                # 更新を取り消す -> 前の値に戻す
+                if target_id in df_latest['ID'].values:
+                    idx = df_latest[df_latest['ID'] == target_id].index[0]
+                    df_latest.at[idx, '在庫数'] = undo_data['prev_qty']
+                    df_latest.at[idx, '仕入れ値'] = undo_data['prev_cost']
+                    save_data(df_latest)
+                    msg = f"✅ 直前の追加登録を取り消しました（在庫数を {undo_data['prev_qty']} に、単価を {undo_data['prev_cost']} 円に戻しました）。"
+                else:
+                    msg = "⚠️ データが見つかりませんでした。"
+
+            # 仕入帳からの削除
+            undo_purchase_record(target_id)
+            
+            # セッションクリア
+            del st.session_state['undo_info']
+            st.success(msg)
+            time.sleep(2)
+            st.rerun()
 
 # ==========================================
 # 2. 在庫一覧・編集画面
