@@ -233,7 +233,6 @@ def load_data():
         except Exception:
             df = pd.DataFrame()
 
-        # 【変更】型番を削除
         if df.empty or 'ID' not in df.columns:
             required_cols = ['ID', '商品名', '種類', '状態', 'PSAグレード', '仕入れ日', 
                              '仕入れ値', '想定売値', '参考販売', '参考買取', '保管場所', 'ステータス', 'PSA番号', '在庫数', '仕入れ先']
@@ -414,132 +413,193 @@ df = load_data()
 menu = st.sidebar.radio("メニュー", ["📦 在庫登録", "📊 在庫一覧・編集", "📖 売上履歴・取消", "💰 収支分析"])
 
 # ==========================================
-# 1. 在庫登録画面
+# 1. 在庫登録画面 (Update: バルク登録モード)
 # ==========================================
 if menu == "📦 在庫登録":
     st.header("新規在庫の登録 (古物台帳対応)")
     
     with st.expander("➕ 新規在庫を登録する (ここをタップして開閉)", expanded=True):
-        reg_mode = st.radio("登録モード", ["🃏 シングルカード", "📦 未開封BOX"], horizontal=True)
-        st.subheader("① 商品検索 (販売価格)")
-        search_tab1, search_tab2 = st.tabs(["🔢 型番/パックで検索", "🔤 キーワード検索"])
-        search_keyword = ""
+        # 【追加】登録モードに「素材」を追加
+        reg_mode = st.radio("登録モード", ["🃏 シングルカード", "📦 未開封BOX", "🗃️ 素材(SR/AR等)"], horizontal=True)
         
-        with search_tab1:
-            col_search1, col_search2 = st.columns([2, 1])
-            with col_search1:
-                selected_exp_name = st.selectbox("エキスパンション", list(EXPANSION_LIST.keys()), index=1)
-                expansion_code = EXPANSION_LIST[selected_exp_name]
-            with col_search2:
-                if reg_mode == "🃏 シングルカード": card_number = st.text_input("カード番号", placeholder="例: 100")
-                else: st.info("BOX名で検索"); card_number = ""
-            if st.button("🔍 型番で検索", key="btn_search_code", use_container_width=True):
-                if reg_mode == "🃏 シングルカード":
-                    if expansion_code and card_number: search_keyword = f"{expansion_code} {card_number}"
-                    else: st.warning("パックと番号を入力してください")
-                else:
-                    if selected_exp_name and selected_exp_name != "選択してください":
-                        exp_name_only = selected_exp_name.split("(")[0].strip()
-                        search_keyword = f"{exp_name_only} BOX"
-                    else: st.warning("エキスパンションを選択してください")
+        if reg_mode == "🗃️ 素材(SR/AR等)":
+            st.info("💡 オリパ作成用の素材（ハズレ枠・最低保証枠）を枚数単位で管理します。平均単価は自動計算されます。")
+            bulk_options = ["【素材】SR", "【素材】HR", "【素材】UR", "【素材】SAR", "【素材】AR", "【素材】RR", "【素材】RRR", "【素材】CHR", "【素材】CSR", "【素材】K(かがやく)"]
+            selected_bulk_name = st.selectbox("素材の種類を選択", bulk_options)
+            initial_name = selected_bulk_name
+            initial_sales = 0
+            # 素材の場合は検索機能をスキップ
+        else:
+            st.subheader("① 商品検索 (販売価格)")
+            search_tab1, search_tab2 = st.tabs(["🔢 型番/パックで検索", "🔤 キーワード検索"])
+            search_keyword = ""
+            
+            with search_tab1:
+                col_search1, col_search2 = st.columns([2, 1])
+                with col_search1:
+                    selected_exp_name = st.selectbox("エキスパンション", list(EXPANSION_LIST.keys()), index=1)
+                    expansion_code = EXPANSION_LIST[selected_exp_name]
+                with col_search2:
+                    if reg_mode == "🃏 シングルカード": card_number = st.text_input("カード番号", placeholder="例: 100")
+                    else: st.info("BOX名で検索"); card_number = ""
+                if st.button("🔍 型番で検索", key="btn_search_code", use_container_width=True):
+                    if reg_mode == "🃏 シングルカード":
+                        if expansion_code and card_number: search_keyword = f"{expansion_code} {card_number}"
+                        else: st.warning("パックと番号を入力してください")
+                    else:
+                        if selected_exp_name and selected_exp_name != "選択してください":
+                            exp_name_only = selected_exp_name.split("(")[0].strip()
+                            search_keyword = f"{exp_name_only} BOX"
+                        else: st.warning("エキスパンションを選択してください")
 
-        with search_tab2:
-            free_word = st.text_input("カード名 / 商品名", placeholder="例: ピカチュウ, ナンジャモ, ミモザ")
-            if st.button("🔍 名前で検索", key="btn_search_name", use_container_width=True):
-                if free_word: search_keyword = free_word
-                else: st.warning("キーワードを入力してください")
+            with search_tab2:
+                free_word = st.text_input("カード名 / 商品名", placeholder="例: ピカチュウ, ナンジャモ, ミモザ")
+                if st.button("🔍 名前で検索", key="btn_search_name", use_container_width=True):
+                    if free_word: search_keyword = free_word
+                    else: st.warning("キーワードを入力してください")
 
-        if 'search_candidates' not in st.session_state: st.session_state['search_candidates'] = []
-        if 'selected_item' not in st.session_state: st.session_state['selected_item'] = None
+            if 'search_candidates' not in st.session_state: st.session_state['search_candidates'] = []
+            if 'selected_item' not in st.session_state: st.session_state['selected_item'] = None
 
-        if search_keyword:
-            with st.spinner('カードラッシュから情報を取得中...'):
-                results = search_card_rush(search_keyword)
-                st.session_state['search_candidates'] = results
-                st.session_state['selected_item'] = None
-                if not results: st.error("見つかりませんでした。")
+            if search_keyword:
+                with st.spinner('カードラッシュから情報を取得中...'):
+                    results = search_card_rush(search_keyword)
+                    st.session_state['search_candidates'] = results
+                    st.session_state['selected_item'] = None
+                    if not results: st.error("見つかりませんでした。")
 
-        if st.session_state['search_candidates'] and not st.session_state['selected_item']:
-            st.info(f"💡 {len(st.session_state['search_candidates'])} 件見つかりました。登録する商品を選択してください。")
-            st.write("---")
-            for i, item in enumerate(st.session_state['search_candidates']):
-                c1, c2, c3 = st.columns([3, 1, 1])
-                with c1: st.write(f"**{item['name']}**")
-                with c2: st.write(f"¥{item['price']:,}")
-                with c3:
-                    if st.button("選択", key=f"sel_{i}", use_container_width=True):
-                        st.session_state['selected_item'] = item
-                        st.session_state['search_candidates'] = []
-                        st.rerun()
-            st.write("---")
+            if st.session_state['search_candidates'] and not st.session_state['selected_item']:
+                st.info(f"💡 {len(st.session_state['search_candidates'])} 件見つかりました。登録する商品を選択してください。")
+                st.write("---")
+                for i, item in enumerate(st.session_state['search_candidates']):
+                    c1, c2, c3 = st.columns([3, 1, 1])
+                    with c1: st.write(f"**{item['name']}**")
+                    with c2: st.write(f"¥{item['price']:,}")
+                    with c3:
+                        if st.button("選択", key=f"sel_{i}", use_container_width=True):
+                            st.session_state['selected_item'] = item
+                            st.session_state['search_candidates'] = []
+                            st.rerun()
+                st.write("---")
 
-        initial_name = ""
-        initial_sales = 0
-        if st.session_state['selected_item']:
-            res = st.session_state['selected_item']
-            initial_name = res['name']
-            initial_sales = res['price']
-            st.success(f"選択中: {initial_name}")
-            st.info(f"🛒 現在の販売相場: ¥{initial_sales:,}")
-            if st.button("やり直す"):
-                st.session_state['selected_item'] = None
-                st.rerun()
+            initial_name = ""
+            initial_sales = 0
+            if st.session_state['selected_item']:
+                res = st.session_state['selected_item']
+                initial_name = res['name']
+                initial_sales = res['price']
+                st.success(f"選択中: {initial_name}")
+                st.info(f"🛒 現在の販売相場: ¥{initial_sales:,}")
+                if st.button("やり直す"):
+                    st.session_state['selected_item'] = None
+                    st.rerun()
 
         st.divider()
-        default_category = "シングルカード" if reg_mode == "🃏 シングルカード" else "未開封BOX"
-        
+        if reg_mode == "🃏 シングルカード": default_category = "シングルカード"
+        elif reg_mode == "📦 未開封BOX": default_category = "未開封BOX"
+        else: default_category = "素材・バルク"
+
         with st.form("register_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
                 name = st.text_input("商品名", value=initial_name)
-                category = st.selectbox("種類", ["シングルカード", "未開封BOX", "サプライ", "その他"], index=["シングルカード", "未開封BOX", "サプライ", "その他"].index(default_category))
-                condition = st.selectbox("状態", ["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"], index=1)
-                psa_grade = st.selectbox("PSAグレード", ["未鑑定", "10", "9", "その他"], index=0)
-                psa_num = st.text_input("PSA証明番号 (Cert #)", placeholder="例: 12345678")
+                # カテゴリ選択肢に「素材・バルク」を追加
+                category = st.selectbox("種類", ["シングルカード", "未開封BOX", "素材・バルク", "サプライ", "その他"], index=["シングルカード", "未開封BOX", "素材・バルク", "サプライ", "その他"].index(default_category))
+                
+                if reg_mode == "🗃️ 素材(SR/AR等)":
+                    condition = "プレイ用"
+                    psa_grade = "未鑑定"
+                    psa_num = ""
+                    st.info("※素材モードのため、状態は「プレイ用」で固定されます。")
+                else:
+                    condition = st.selectbox("状態", ["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"], index=1)
+                    psa_grade = st.selectbox("PSAグレード", ["未鑑定", "10", "9", "その他"], index=0)
+                    psa_num = st.text_input("PSA証明番号 (Cert #)", placeholder="例: 12345678")
+
             with col2:
                 st.markdown("##### 📥 仕入れ情報 (古物台帳)")
                 source = st.selectbox("仕入れ先区分", ["カードショップ", "メルカリ・フリマ", "個人買取", "自引き(パック開封)", "その他"])
                 purchase_note = st.text_input("仕入れ備考 (相手方情報など)", placeholder="例: 秋葉原店、ユーザー名など")
                 
-                quantity = st.number_input("在庫数 (個)", min_value=1, value=1, step=1)
-                cost = st.number_input("仕入れ値 (1個あたり)", min_value=0, step=100)
+                quantity = st.number_input("在庫数 (個/枚)", min_value=1, value=1, step=1)
+                cost = st.number_input("仕入れ値 (1個/1枚あたり)", min_value=0, step=10, help="今回の仕入れ単価を入力してください。在庫追加時は平均単価が自動更新されます。")
                 
-                c_p1, c_p2 = st.columns(2)
-                with c_p1: ref_sales = st.number_input("参考販売価格", value=initial_sales, step=100)
-                with c_p2: ref_buyback = st.number_input("参考買取価格", value=0, step=100)
-                target_price = st.number_input("想定売値", value=initial_sales, step=100)
+                if reg_mode == "🗃️ 素材(SR/AR等)":
+                    ref_sales = 0
+                    ref_buyback = 0
+                    target_price = 0
+                else:
+                    c_p1, c_p2 = st.columns(2)
+                    with c_p1: ref_sales = st.number_input("参考販売価格", value=initial_sales, step=100)
+                    with c_p2: ref_buyback = st.number_input("参考買取価格", value=0, step=100)
+                    target_price = st.number_input("想定売値", value=initial_sales, step=100)
+                
                 location = st.text_input("保管場所", placeholder="例：防湿庫A")
             
             submitted = st.form_submit_button("登録する (在庫＆仕入帳へ)", use_container_width=True)
             if submitted and name:
-                new_id = str(uuid.uuid4())[:8]
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
-                new_data = pd.DataFrame({
-                    'ID': [new_id], '商品名': [name],
-                    '種類': [category], '状態': [condition], 'PSAグレード': [psa_grade],
-                    '仕入れ日': [purchase_date],
-                    '仕入れ値': [cost], '想定売値': [target_price], '参考販売': [ref_sales], '参考買取': [ref_buyback], 
-                    '保管場所': [location], 'ステータス': ['在庫あり'], 'PSA番号': [str(psa_num)],
-                    '在庫数': [quantity], '仕入れ先': [source]
-                })
+                # 【追加機能】既存の素材があるかチェックし、あれば平均単価更新＆合算
+                existing_item_idx = None
+                if not df.empty and category == "素材・バルク":
+                    # 同名の素材を探す
+                    matches = df[df['商品名'] == name]
+                    if not matches.empty:
+                        # 既存データが見つかった場合
+                        existing_item_idx = matches.index[0]
+                        existing_row = matches.iloc[0]
+                        
+                        # 平均単価計算: (既存総額 + 今回総額) / 合計個数
+                        current_qty = int(existing_row['在庫数'])
+                        current_cost = float(existing_row['仕入れ値'])
+                        
+                        total_qty = current_qty + quantity
+                        total_val = (current_qty * current_cost) + (quantity * cost)
+                        new_avg_cost = int(total_val / total_qty)
+                        
+                        # データ更新
+                        df.at[existing_item_idx, '在庫数'] = total_qty
+                        df.at[existing_item_idx, '仕入れ値'] = new_avg_cost
+                        df.at[existing_item_idx, '仕入れ日'] = purchase_date # 最新仕入れ日に更新
+                        
+                        # IDは既存のものを使用
+                        target_id = existing_row['ID']
+                        
+                        st.success(f"既存の「{name}」に{quantity}枚追加しました。平均単価: ¥{current_cost} → ¥{new_avg_cost}")
+                    else:
+                        existing_item_idx = None
+
+                # 新規登録の場合 (既存が見つからなかった場合)
+                if existing_item_idx is None:
+                    new_id = str(uuid.uuid4())[:8]
+                    new_data = pd.DataFrame({
+                        'ID': [new_id], '商品名': [name],
+                        '種類': [category], '状態': [condition], 'PSAグレード': [psa_grade],
+                        '仕入れ日': [purchase_date],
+                        '仕入れ値': [cost], '想定売値': [target_price], '参考販売': [ref_sales], '参考買取': [ref_buyback], 
+                        '保管場所': [location], 'ステータス': ['在庫あり'], 'PSA番号': [str(psa_num)],
+                        '在庫数': [quantity], '仕入れ先': [source]
+                    })
+                    if not df.empty: df = pd.concat([df, new_data], ignore_index=True)
+                    else: df = new_data
+                    target_id = new_id
+                    st.success(f"「{name}」を新規登録しました！")
+
+                # どちらの場合でも保存と仕入れ記録
+                save_data(df)
                 
                 purchase_record = {
-                    'ID': new_id, '商品名': name, '仕入れ日': purchase_date,
+                    'ID': target_id, '商品名': name, '仕入れ日': purchase_date,
                     '仕入れ値': cost, '仕入れ先': source, '備考': purchase_note
                 }
-                
-                if not df.empty: df = pd.concat([df, new_data], ignore_index=True)
-                else: df = new_data
-                save_data(df)
                 record_purchase(purchase_record)
                 
                 st.session_state['selected_item'] = None
                 st.session_state['search_candidates'] = []
-                st.success(f"「{name}」を登録し、仕入帳に記録しました！")
 
 # ==========================================
-# 2. 在庫一覧・編集画面 (Safe UI Version)
+# 2. 在庫一覧・編集画面
 # ==========================================
 elif menu == "📊 在庫一覧・編集":
     st.header("在庫リスト")
@@ -576,7 +636,6 @@ elif menu == "📊 在庫一覧・編集":
         )
 
         # 表示用データの加工
-        # 1. 必要な列を作成
         df_display["削除"] = False
         def make_psa_url(num):
             if pd.notna(num) and str(num).strip() != "":
@@ -585,22 +644,18 @@ elif menu == "📊 在庫一覧・編集":
             return None
         df_display["PSAリンク"] = df_display["PSA番号"].apply(make_psa_url)
 
-        # 2. IDをインデックスに設定 (これでhide_index=TrueにすればID列は隠れるが、データは維持される)
         df_display.set_index("ID", inplace=True)
         
-        # 3. 表示したい列だけを絞り込む
         visible_cols = ["削除", "商品名", "在庫数", "種類", "状態", "仕入れ値", "想定売値", "参考販売", "ステータス", "PSAリンク"]
-        # 存在しない列エラーを防ぐ
         display_cols = [c for c in visible_cols if c in df_display.columns]
         df_display_limited = df_display[display_cols]
 
-        # カラム設定 (hidden=Trueは使用しない)
         all_column_config = {
              "削除": st.column_config.CheckboxColumn("削除", width="small", default=False),
              "商品名": st.column_config.TextColumn("商品名", width="medium"),
              "在庫数": st.column_config.NumberColumn("在庫", format="%d", width="small", min_value=0),
              "種類": st.column_config.TextColumn("種類", width="small"),
-             "状態": st.column_config.SelectboxColumn("状態", width="small", options=["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)"]),
+             "状態": st.column_config.SelectboxColumn("状態", width="small", options=["S (完美品)", "A (美品)", "B (傷有)", "C (難あり)", "未開封(シュリンク付)", "未開封(シュリンク無)", "プレイ用"]),
              "仕入れ値": st.column_config.NumberColumn("仕入", format="¥%d", width="small"),
              "想定売値": st.column_config.NumberColumn("売値", format="¥%d", width="small"),
              "参考販売": st.column_config.NumberColumn("相場", format="¥%d", width="small"),
@@ -608,34 +663,27 @@ elif menu == "📊 在庫一覧・編集":
              "PSAリンク": st.column_config.LinkColumn("PSA", width="small", display_text="🔗")
         }
 
-        # スマホモード
         if is_mobile_view:
             target_cols = ["削除", "商品名", "在庫数", "想定売値", "ステータス"]
             df_display_limited = df_display_limited[[c for c in target_cols if c in df_display_limited.columns]]
             st.info("💡 スマホモード: 最小限の列のみ表示")
 
-        # データエディタ
         edited_df = st.data_editor(
             df_display_limited,
             column_config=all_column_config,
-            hide_index=True, # ここでID(index)を隠す
+            hide_index=True,
             key="inventory_editor",
             use_container_width=True
         )
 
-        # 保存処理 (IDインデックスを使ってマージ)
         if not edited_df.empty:
-            # 変更があった場合、元のdfを更新
-            # 元のdfもIDをインデックスにしてupdateする
             df_indexed = df.set_index("ID")
             df_indexed.update(edited_df)
             df = df_indexed.reset_index()
             save_data(df)
 
-        # 詳細表示エリア (IDを使ってデータを取得)
         if selected_label:
             target_id = select_options[selected_label]
-            # 編集後のデータではなく、最新のdfからデータを取る
             target_row = df[df['ID'] == target_id]
             
             if not target_row.empty:
@@ -666,7 +714,7 @@ elif menu == "📊 在庫一覧・編集":
                                 sales_price = st.number_input("売却額 (合計金額)", min_value=0, value=int(row_data['想定売値']) * sold_qty, step=100, help="1個あたりではなく、今回の取引の合計金額を入れてください")
                                 sales_date = st.date_input("売却日", datetime.now())
                             with c_s2:
-                                sales_dest = st.selectbox("売却先", ["メルカリ", "Yahoo!フリマ", "Clove", "店舗買取", "対面", "その他"])
+                                sales_dest = st.selectbox("売却先", ["メルカリ", "Yahoo!フリマ", "Clove", "店舗買取", "対面", "その他", "オリパ封入"])
                                 sales_note = st.text_input("売却備考", placeholder="購入者名など(任意)")
                             
                             if st.form_submit_button("売却を確定する", type="primary", use_container_width=True):
@@ -716,7 +764,6 @@ elif menu == "📊 在庫一覧・編集":
         with col_act1:
             if st.button("🗑️ チェックした項目を削除", use_container_width=True):
                 if '削除' in edited_df.columns:
-                    # edited_dfのインデックスはIDなので、インデックスを取得
                     ids_to_delete = edited_df[edited_df['削除']].index.tolist()
                     if ids_to_delete:
                         df_new = df[~df['ID'].isin(ids_to_delete)]
@@ -733,7 +780,6 @@ elif menu == "📊 在庫一覧・編集":
                     for i, rid in enumerate(ids_to_update):
                         txt.text(f"更新中... ({i+1}/{len(ids_to_update)})")
                         bar.progress((i + 1) / len(ids_to_update))
-                        # IDで元データから検索
                         row = df[df['ID'] == rid].iloc[0]
                         keyword = row['商品名']
                         try:
