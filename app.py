@@ -329,35 +329,68 @@ if menu == "📦 スピード仕入・解体":
                     st.rerun()
 
             st.divider()
+            
+            # ---------------------------------------------------------
+            # 🔄 変更点：移動平均法による合算ロジックの実装
+            # ---------------------------------------------------------
             if st.button("✨ この内容で在庫DBと帳簿に一括登録 ✨", type="primary", use_container_width=True):
                 df_inv = load_data()
                 batch_id = "B" + str(uuid.uuid4())[:7]
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
                 new_inventory_rows = []
+                
                 for idx, row in edited_cart.iterrows():
                     item_id = row['ID']
                     original_item = next(item for item in st.session_state['cart'] if item['id'] == item_id)
+                    item_type = row['種類']
+                    item_name = row['商品名']
+                    new_qty = int(row['数量'])
+                    new_cost = int(row['自動計算原価'])
+                    
                     if original_item['type'] != "サプライ":
-                        new_inventory_rows.append({
-                            'ID': item_id, '商品名': row['商品名'], '種類': row['種類'],
-                            '状態_PSA': original_item['cond'], '仕入日': purchase_date,
-                            '原価': row['自動計算原価'], '参考相場': row['参考相場'],
-                            '在庫数': row['数量'], '仕入元': purchase_source,
-                            'ステータス': '在庫あり', 'PSA番号': ''
-                        })
+                        # BOXと素材の場合は既存の在庫を検索して「移動平均」で上書きする
+                        is_merged = False
+                        if item_type in ["未開封BOX", "素材・バルク"] and not df_inv.empty:
+                            match_idx = df_inv[(df_inv['商品名'] == item_name) & (df_inv['種類'] == item_type)].index
+                            if len(match_idx) > 0:
+                                target_idx = match_idx[0]
+                                current_qty = int(df_inv.at[target_idx, '在庫数'])
+                                current_cost = int(df_inv.at[target_idx, '原価'])
+                                
+                                # 移動平均の計算式: (現在の総原価 + 今回の総原価) / (現在の数 + 今回の数)
+                                total_value = (current_qty * current_cost) + (new_qty * new_cost)
+                                new_total_qty = current_qty + new_qty
+                                new_avg_cost = int(total_value / new_total_qty) if new_total_qty > 0 else 0
+                                
+                                # 既存の行を上書き更新
+                                df_inv.at[target_idx, '在庫数'] = new_total_qty
+                                df_inv.at[target_idx, '原価'] = new_avg_cost
+                                df_inv.at[target_idx, '仕入日'] = purchase_date # 最新の仕入日に更新
+                                is_merged = True
+                        
+                        # 合算されなかった（新規のBOX/素材、またはシングルカード）場合は新しい行として追加
+                        if not is_merged:
+                            new_inventory_rows.append({
+                                'ID': item_id, '商品名': item_name, '種類': item_type,
+                                '状態_PSA': original_item['cond'], '仕入日': purchase_date,
+                                '原価': new_cost, '参考相場': row['参考相場'],
+                                '在庫数': new_qty, '仕入元': purchase_source,
+                                'ステータス': '在庫あり', 'PSA番号': ''
+                            })
                 
                 if new_inventory_rows:
                     new_inv_df = pd.DataFrame(new_inventory_rows)
-                    df_combined = pd.concat([df_inv, new_inv_df], ignore_index=True) if not df_inv.empty else new_inv_df
-                    save_data(df_combined)
+                    df_inv = pd.concat([df_inv, new_inv_df], ignore_index=True) if not df_inv.empty else new_inv_df
+                
+                save_data(df_inv)
                 
                 record_title = purchase_title if purchase_title else f"一括仕入 ({len(st.session_state['cart'])}点)"
                 record_purchase_batch(batch_id, purchase_date, record_title, total_paid, purchase_source, "カート一括登録")
                 
                 st.session_state['cart'] = []
                 st.session_state['has_searched'] = False
-                st.success("🎉 一括登録しました！")
+                st.success("🎉 在庫DBに移動平均を適用して一括登録しました！")
                 time.sleep(1.5)
                 st.rerun()
 
@@ -373,7 +406,7 @@ elif menu == "📊 在庫・PSA管理":
     else:
         df_active = df[df['ステータス'] != '売却済み'].copy()
         
-        tab_singles, tab_box_bulk, tab_psa, tab_edit = st.tabs(["🃏 シングル在庫", "📦 BOX・素材 (平均単価)", "💎 PSA管理", "✏️ データ編集・削除"])
+        tab_singles, tab_box_bulk, tab_psa, tab_edit = st.tabs(["🃏 シングル在庫", "📦 BOX・素材", "💎 PSA管理", "✏️ データ編集・削除"])
         
         with tab_singles:
             st.subheader("🃏 シングルカード在庫 (PSA以外)")
@@ -393,15 +426,17 @@ elif menu == "📊 在庫・PSA管理":
                 st.caption("現在、該当する在庫はありません。")
 
         with tab_box_bulk:
-            st.subheader("📦 未開封BOX・素材 (自動平均化)")
+            # ---------------------------------------------------------
+            # 🔄 変更点：すでにDB側で1行にまとまっているので、そのまま表示するだけ
+            # ---------------------------------------------------------
+            st.subheader("📦 未開封BOX・素材")
+            st.write("※同じBOXや素材は、仕入れ時に「完全・移動平均」で自動的に1行に合算されています。")
             df_bb = df_active[df_active['種類'].isin(['未開封BOX', '素材・バルク'])].copy()
+            
             if not df_bb.empty:
-                df_bb['総原価'] = df_bb['原価'] * df_bb['在庫数']
-                grouped = df_bb.groupby(['種類', '商品名']).agg(合計在庫数=('在庫数', 'sum'), 合計総原価=('総原価', 'sum')).reset_index()
-                grouped['平均単価(原価)'] = (grouped['合計総原価'] / grouped['合計在庫数']).fillna(0).astype(int)
-                st.dataframe(grouped[['種類', '商品名', '合計在庫数', '平均単価(原価)']], use_container_width=True, hide_index=True)
+                st.dataframe(df_bb[['商品名', '種類', '原価', '在庫数', '参考相場', 'ステータス']], use_container_width=True, hide_index=True)
             else:
-                st.caption("現在、在庫はありません。")
+                st.caption("現在、該当する在庫はありません。")
 
         with tab_psa:
             st.subheader("💎 PSA管理 (提出中・鑑定済み)")
