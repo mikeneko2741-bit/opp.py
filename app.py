@@ -71,8 +71,8 @@ def check_and_init_sheets():
     try:
         ws_sales = sh.worksheet(SHEET_SALES)
     except:
-        ws_sales = sh.add_worksheet(title=SHEET_SALES, rows=1000, cols=12)
-        ws_sales.append_row(['ID', '売却日', '商品名', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
+        ws_sales = sh.add_worksheet(title=SHEET_SALES, rows=1000, cols=13)
+        ws_sales.append_row(['ID', '元の在庫ID', '売却日', '商品名', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
 
     return ws_inv, ws_pur, ws_sales
 
@@ -116,6 +116,8 @@ def load_sales_data():
             df = get_as_dataframe(ws_sales, evaluate_formulas=True)
             df = df.dropna(subset=['ID'])
             df = df[df['ID'] != '']
+            if '元の在庫ID' not in df.columns:
+                df['元の在庫ID'] = ""
             for col in ['売却数', '売上額', '手数料', '経費_送料', '純利益']:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             return df
@@ -126,7 +128,7 @@ def load_sales_data():
 def save_sales_data(df):
     _, _, ws_sales = check_and_init_sheets()
     if ws_sales:
-        save_cols = ['ID', '売却日', '商品名', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時']
+        save_cols = ['ID', '元の在庫ID', '売却日', '商品名', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時']
         df_to_save = df.copy()
         for col in save_cols:
             if col not in df_to_save.columns:
@@ -159,7 +161,8 @@ def clean_product_name(text):
 def fetch_from_url(url):
     results = []
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
+        # 【修正】先祖返りしていたbot回避用の強力なヘッダーを復活させました
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"}
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = "utf-8"
         soup = BeautifulSoup(res.content, 'html.parser')
@@ -387,7 +390,7 @@ if menu == "📦 スピード仕入・解体":
                 
                 st.session_state['cart'] = []
                 st.session_state['has_searched'] = False
-                st.success("🎉 在庫DBに移動平均を適用して一括登録しました！")
+                st.success("🎉 在庫DBに一括登録しました！")
                 time.sleep(1.5); st.rerun()
 
 # =========================================================
@@ -464,12 +467,10 @@ elif menu == "📊 在庫・PSA管理":
                         save_data(df)
                         st.success("登録しました！"); time.sleep(1); st.rerun()
 
-        # --- 新機能：売却レジ ---
         with tab_sell:
             st.subheader("🛒 売却レジ (レジ打ち)")
             st.write("在庫から商品を売却し、手数料を自動計算して帳簿に記録します。")
             
-            # 売却可能な在庫（在庫数が1以上）をリストアップ
             sell_options = {f"{row['商品名']} (残:{row['在庫数']} | 原価:¥{row['原価']}) [ID:{row['ID']}]": row['ID'] for idx, row in df_active[df_active['在庫数'] > 0].iterrows()}
             target_sell = st.selectbox("売却する商品を選択してください", options=list(sell_options.keys()), index=None)
 
@@ -492,21 +493,14 @@ elif menu == "📊 在庫・PSA管理":
                     submitted = st.form_submit_button("売却を確定して帳簿に記録", type="primary", use_container_width=True)
                     
                     if submitted:
-                        # 販路ごとの手数料計算
-                        if channel == "BASE (Web経由)":
-                            fee = int(sell_price * 0.066) + 40 if sell_price > 0 else 0
-                        elif channel == "BASE (PayIDアプリ経由)":
-                            fee = int(sell_price * 0.095) + 40 if sell_price > 0 else 0
-                        elif channel == "メルカリ":
-                            fee = int(sell_price * 0.10)
-                        else:
-                            fee = 0
+                        if channel == "BASE (Web経由)": fee = int(sell_price * 0.066) + 40 if sell_price > 0 else 0
+                        elif channel == "BASE (PayIDアプリ経由)": fee = int(sell_price * 0.095) + 40 if sell_price > 0 else 0
+                        elif channel == "メルカリ": fee = int(sell_price * 0.10)
+                        else: fee = 0
                             
-                        # 純利益の計算
                         total_cost = item_row['原価'] * sell_qty
                         profit = sell_price - fee - shipping_cost - total_cost
                         
-                        # 1. 在庫の更新
                         new_qty = item_row['在庫数'] - sell_qty
                         if new_qty <= 0:
                             df.loc[df['ID'] == item_id, '在庫数'] = 0
@@ -515,11 +509,10 @@ elif menu == "📊 在庫・PSA管理":
                             df.loc[df['ID'] == item_id, '在庫数'] = new_qty
                         save_data(df)
                         
-                        # 2. 売上帳の記録
                         df_sales = load_sales_data()
                         sale_id = "S" + str(uuid.uuid4())[:7]
                         new_sale = pd.DataFrame([{
-                            'ID': sale_id, '売却日': str(sell_date), '商品名': item_row['商品名'],
+                            'ID': sale_id, '元の在庫ID': item_id, '売却日': str(sell_date), '商品名': item_row['商品名'],
                             '売却数': sell_qty, '売上額': sell_price, '手数料': fee,
                             '経費_送料': shipping_cost, '純利益': profit, '販路': channel,
                             '備考': note, '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -653,7 +646,7 @@ elif menu == "🛍️ オリパ工場":
                             st.success(f"🎉 オリパが完成しました！"); time.sleep(2); st.rerun()
 
 # =========================================================
-# 📖 第4フェーズ：帳簿・分析 (NEW)
+# 📖 第4フェーズ：帳簿・分析
 # =========================================================
 elif menu == "📖 帳簿・分析":
     st.header("📖 帳簿・分析 (ダッシュボード)")
@@ -706,11 +699,15 @@ elif menu == "📖 帳簿・分析":
             if target_undo and st.button("🚨 この取引を取り消す", type="primary"):
                 sale_id = undo_opts[target_undo]
                 sale_row = df_sales[df_sales['ID'] == sale_id].iloc[0]
-                item_name = sale_row['商品名']
                 restored_qty = sale_row['売却数']
                 
-                # 在庫に数を戻す処理
-                match_inv = df_inv[df_inv['商品名'] == item_name]
+                original_item_id = sale_row.get('元の在庫ID', '')
+                
+                if original_item_id:
+                    match_inv = df_inv[df_inv['ID'] == original_item_id]
+                else:
+                    match_inv = df_inv[df_inv['商品名'] == sale_row['商品名']]
+                
                 if not match_inv.empty:
                     target_inv_id = match_inv.iloc[0]['ID']
                     current_qty = match_inv.iloc[0]['在庫数']
