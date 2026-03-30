@@ -103,17 +103,19 @@ def record_purchase_batch(batch_id, date, title, total_paid, source, note):
         ws_pur.append_row(row)
 
 # ---------------------------------------------------------
-# 🌐 スクレイピング (画像取得対応)
+# 🌐 スクレイピング (画像取得＆ブロック回避対応)
 # ---------------------------------------------------------
 def fetch_from_url(url):
     results = []
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
+        # カードラッシュのブロックを回避するための詳細なヘッダー（v2.1と同じものに復旧）
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"}
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = "utf-8"
         soup = BeautifulSoup(res.content, 'html.parser')
         
-        items = soup.select('.item_box, .goods_box, .search_result_item')
+        # 検索結果のすべてのパターンを網羅
+        items = soup.select('.item_box, .goods_box, .item_data, .sys_item_row, .search_result_item')
         
         for item in items:
             name_tag = item.select_one('.item_name, .goods_name, .name')
@@ -165,9 +167,11 @@ def search_card_rush(keyword):
 st.set_page_config(page_title="ぽっけぇ〜道 システム", layout="wide")
 st.title("🎴 ぽっけぇ〜道 管理システム v3.0")
 
-# セッションステート（カート）の初期化
+# セッションステート（カート等）の初期化
 if 'cart' not in st.session_state:
     st.session_state['cart'] = []
+if 'has_searched' not in st.session_state:
+    st.session_state['has_searched'] = False
 
 menu = st.sidebar.radio(
     "【作業メニュー】", 
@@ -193,38 +197,44 @@ if menu == "📦 スピード仕入・解体":
             if st.button("検索", type="primary", use_container_width=True):
                 if search_word:
                     with st.spinner("カードラッシュを検索中..."):
-                        st.session_state['search_res'] = search_card_rush(search_word)
+                        res = search_card_rush(search_word)
+                        st.session_state['search_res'] = res
+                        st.session_state['has_searched'] = True # 検索を実行したという目印
                 else:
                     st.warning("キーワードを入力してください。")
             
-            if 'search_res' in st.session_state and st.session_state['search_res']:
-                st.write("---")
-                for item in st.session_state['search_res']:
-                    c1, c2, c3 = st.columns([1, 3, 2])
-                    with c1:
-                        if item['image']: st.image(item['image'], width=50)
-                        else: st.write("🖼️ 画像なし")
-                    with c2:
-                        st.write(f"**{item['name']}**")
-                        st.caption(f"相場: ¥{item['price']:,}")
-                    with c3:
-                        # 追加フォーム
-                        with st.popover("カートに追加"):
-                            add_qty = st.number_input("枚数/個数", min_value=1, value=1, key=f"qty_{item['name']}")
-                            add_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"cond_{item['name']}")
-                            if st.button("追加する", key=f"add_{item['name']}", use_container_width=True):
-                                st.session_state['cart'].append({
-                                    "id": str(uuid.uuid4())[:8],
-                                    "name": item['name'],
-                                    "type": "未開封BOX" if "BOX" in item['name'] else "シングルカード",
-                                    "cond": add_cond,
-                                    "qty": add_qty,
-                                    "market_price": item['price']
-                                })
-                                st.success("追加しました！")
-                                time.sleep(0.5)
-                                st.rerun()
-                st.write("---")
+            # 検索結果の表示ロジックを改善
+            if st.session_state.get('has_searched'):
+                if st.session_state.get('search_res'):
+                    st.write("---")
+                    for item in st.session_state['search_res']:
+                        c1, c2, c3 = st.columns([1, 3, 2])
+                        with c1:
+                            if item['image']: st.image(item['image'], width=50)
+                            else: st.write("🖼️ 画像なし")
+                        with c2:
+                            st.write(f"**{item['name']}**")
+                            st.caption(f"相場: ¥{item['price']:,}")
+                        with c3:
+                            # 追加フォーム
+                            with st.popover("カートに追加"):
+                                add_qty = st.number_input("枚数/個数", min_value=1, value=1, key=f"qty_{item['name']}")
+                                add_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"cond_{item['name']}")
+                                if st.button("追加する", key=f"add_{item['name']}", use_container_width=True):
+                                    st.session_state['cart'].append({
+                                        "id": str(uuid.uuid4())[:8],
+                                        "name": item['name'],
+                                        "type": "未開封BOX" if "BOX" in item['name'] else "シングルカード",
+                                        "cond": add_cond,
+                                        "qty": add_qty,
+                                        "market_price": item['price']
+                                    })
+                                    st.success("追加しました！")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                    st.write("---")
+                else:
+                    st.error("見つかりませんでした。別のキーワード（ひらがなにする、スペースをあける等）で試してください。")
         
         with tab_bulk:
             st.info("オリパ作成用のハズレ枠素材を一括追加します。")
@@ -282,14 +292,12 @@ if menu == "📦 スピード仕入・解体":
             cart_df = pd.DataFrame(st.session_state['cart'])
             
             # 【キモ】相場比率による原価の自動按分計算
-            # カート内の総相場価値を計算
             total_market_value = sum(item['qty'] * item['market_price'] for item in st.session_state['cart'])
             
             calculated_cart = []
             for item in st.session_state['cart']:
                 item_total_market = item['qty'] * item['market_price']
                 
-                # 相場比率をもとに、支払総額から原価を割り出す
                 if total_market_value > 0:
                     ratio = item_total_market / total_market_value
                     allocated_cost_total = total_paid * ratio
@@ -317,14 +325,13 @@ if menu == "📦 スピード仕入・解体":
                 hide_index=True,
                 column_config={
                     "削除": st.column_config.CheckboxColumn("削除", width="small", default=False),
-                    "ID": None, # IDは隠す
+                    "ID": None,
                     "自動計算原価": st.column_config.NumberColumn("原価/個", format="¥%d"),
                     "参考相場": st.column_config.NumberColumn("相場/個", format="¥%d"),
                 },
                 use_container_width=True
             )
             
-            # 削除チェックが入ったものをカートから消す処理
             if edited_cart['削除'].any():
                 if st.button("🗑️ チェックした商品をカートから外す"):
                     ids_to_keep = edited_cart[~edited_cart['削除']]['ID'].tolist()
@@ -333,21 +340,18 @@ if menu == "📦 スピード仕入・解体":
 
             st.divider()
             
-            # 確定ボタン
             if st.button("✨ この内容で在庫DBと帳簿に一括登録 ✨", type="primary", use_container_width=True):
                 df_inv = load_data()
-                batch_id = "B" + str(uuid.uuid4())[:7] # 今回の取引全体を表すID
+                batch_id = "B" + str(uuid.uuid4())[:7]
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
                 new_inventory_rows = []
                 
                 for idx, row in edited_cart.iterrows():
                     item_id = row['ID']
-                    # 元のカート情報から状態などを取得
                     original_item = next(item for item in st.session_state['cart'] if item['id'] == item_id)
                     
                     if original_item['type'] != "サプライ":
-                        # サプライ以外は在庫DBへ追加
                         new_inventory_rows.append({
                             'ID': item_id,
                             '商品名': row['商品名'],
@@ -361,7 +365,6 @@ if menu == "📦 スピード仕入・解体":
                             'ステータス': '在庫あり'
                         })
                 
-                # 在庫DBの保存
                 if new_inventory_rows:
                     new_inv_df = pd.DataFrame(new_inventory_rows)
                     if not df_inv.empty:
@@ -370,12 +373,11 @@ if menu == "📦 スピード仕入・解体":
                         df_combined = new_inv_df
                     save_data(df_combined)
                 
-                # 仕入帳の保存（全体で1行として記録）
                 record_title = purchase_title if purchase_title else f"一括仕入 ({len(st.session_state['cart'])}点)"
                 record_purchase_batch(batch_id, purchase_date, record_title, total_paid, purchase_source, "カート一括登録")
                 
-                # カートを空にする
                 st.session_state['cart'] = []
+                st.session_state['has_searched'] = False
                 if 'search_res' in st.session_state: del st.session_state['search_res']
                 
                 st.success("🎉 全てのデータを在庫と帳簿に一括登録しました！")
