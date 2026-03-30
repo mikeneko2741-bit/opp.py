@@ -161,7 +161,6 @@ def clean_product_name(text):
 def fetch_from_url(url):
     results = []
     try:
-        # 【修正】先祖返りしていたbot回避用の強力なヘッダーを復活させました
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"}
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = "utf-8"
@@ -236,7 +235,8 @@ if menu == "📦 スピード仕入・解体":
     
     with col_left:
         st.subheader("① 商品を探してカートに入れる")
-        tab_search, tab_bulk, tab_supply = st.tabs(["🔍 カード/BOX検索", "🗃️ 素材(バルク)", "📦 サプライ品"])
+        # 修正：タブに「✍️ 手動登録」を追加
+        tab_search, tab_manual, tab_bulk, tab_supply = st.tabs(["🔍 検索", "✍️ 手動登録", "🗃️ 素材", "📦 サプライ"])
         
         with tab_search:
             search_word = st.text_input("カード名・BOX名を入力", placeholder="例: クレイバースト BOX, ナンジャモ SAR")
@@ -273,7 +273,42 @@ if menu == "📦 スピード仕入・解体":
                                     time.sleep(0.5); st.rerun()
                     st.write("---")
                 else:
-                    st.error("見つかりませんでした。別のキーワードで試してください。")
+                    st.error("見つかりませんでした。別のキーワードで試すか、「手動登録」タブから追加してください。")
+
+        # ---------------------------------------------------------
+        # 🆕 新機能：手動登録タブ
+        # ---------------------------------------------------------
+        with tab_manual:
+            st.info("検索で見つからないマイナーな商品や、エラーカード、オリジナルセット品などを手動でカートに入れます。")
+            man_name = st.text_input("商品名 (必須)", placeholder="例: 限定プロモカード, 未開封パックまとめ")
+            
+            c_type, c_cond = st.columns(2)
+            with c_type:
+                man_type = st.selectbox("種類", ["シングルカード", "未開封BOX", "未開封パック", "その他"])
+            with c_cond:
+                man_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封", "-"])
+            
+            c_price, c_qty = st.columns(2)
+            with c_price:
+                man_price = st.number_input("1個あたりの参考相場 (円)", min_value=0, step=100)
+            with c_qty:
+                man_qty = st.number_input("数量", min_value=1, value=1)
+            
+            if st.button("✍️ 手動でカートに追加", use_container_width=True):
+                if man_name:
+                    st.session_state['cart'].append({
+                        "id": str(uuid.uuid4())[:8],
+                        "name": man_name,
+                        "type": man_type,
+                        "cond": man_cond,
+                        "qty": man_qty,
+                        "market_price": man_price
+                    })
+                    st.success(f"「{man_name}」をカートに追加しました！")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.warning("商品名を入力してください。")
         
         with tab_bulk:
             bulk_type = st.selectbox("素材の種類", ["【素材】SR", "【素材】AR", "【素材】RR", "【素材】CHR", "【素材】K", "【素材】汎用ノーマル"])
@@ -426,7 +461,7 @@ elif menu == "📊 在庫・PSA管理":
 
         with tab_box_bulk:
             st.subheader("📦 未開封BOX・素材")
-            df_bb = df_active[df_active['種類'].isin(['未開封BOX', '素材・バルク', 'オリジナルパック'])].copy()
+            df_bb = df_active[df_active['種類'].isin(['未開封BOX', '素材・バルク', 'オリジナルパック', '未開封パック'])].copy()
             if not df_bb.empty:
                 st.dataframe(df_bb[['商品名', '種類', '原価', '在庫数', '参考相場', 'ステータス']], use_container_width=True, hide_index=True)
             else:
