@@ -235,7 +235,6 @@ if menu == "📦 スピード仕入・解体":
     
     with col_left:
         st.subheader("① 商品を探してカートに入れる")
-        # 修正：タブに「✍️ 手動登録」を追加
         tab_search, tab_manual, tab_bulk, tab_supply = st.tabs(["🔍 検索", "✍️ 手動登録", "🗃️ 素材", "📦 サプライ"])
         
         with tab_search:
@@ -274,39 +273,24 @@ if menu == "📦 スピード仕入・解体":
                     st.write("---")
                 else:
                     st.error("見つかりませんでした。別のキーワードで試すか、「手動登録」タブから追加してください。")
-
-        # ---------------------------------------------------------
-        # 🆕 新機能：手動登録タブ
-        # ---------------------------------------------------------
+        
         with tab_manual:
             st.info("検索で見つからないマイナーな商品や、エラーカード、オリジナルセット品などを手動でカートに入れます。")
             man_name = st.text_input("商品名 (必須)", placeholder="例: 限定プロモカード, 未開封パックまとめ")
-            
             c_type, c_cond = st.columns(2)
-            with c_type:
-                man_type = st.selectbox("種類", ["シングルカード", "未開封BOX", "未開封パック", "その他"])
-            with c_cond:
-                man_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封", "-"])
-            
+            with c_type: man_type = st.selectbox("種類", ["シングルカード", "未開封BOX", "未開封パック", "その他"])
+            with c_cond: man_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封", "-"])
             c_price, c_qty = st.columns(2)
-            with c_price:
-                man_price = st.number_input("1個あたりの参考相場 (円)", min_value=0, step=100)
-            with c_qty:
-                man_qty = st.number_input("数量", min_value=1, value=1)
+            with c_price: man_price = st.number_input("1個あたりの参考相場 (円)", min_value=0, step=100)
+            with c_qty: man_qty = st.number_input("数量", min_value=1, value=1)
             
             if st.button("✍️ 手動でカートに追加", use_container_width=True):
                 if man_name:
                     st.session_state['cart'].append({
-                        "id": str(uuid.uuid4())[:8],
-                        "name": man_name,
-                        "type": man_type,
-                        "cond": man_cond,
-                        "qty": man_qty,
-                        "market_price": man_price
+                        "id": str(uuid.uuid4())[:8], "name": man_name, "type": man_type,
+                        "cond": man_cond, "qty": man_qty, "market_price": man_price
                     })
-                    st.success(f"「{man_name}」をカートに追加しました！")
-                    time.sleep(0.5)
-                    st.rerun()
+                    st.success(f"「{man_name}」をカートに追加しました！"); time.sleep(0.5); st.rerun()
                 else:
                     st.warning("商品名を入力してください。")
         
@@ -361,11 +345,28 @@ if menu == "📦 スピード仕入・解体":
             calc_df = pd.DataFrame(calculated_cart)
             st.write(f"💡 カート内の相場合計: **¥{total_market_value:,}**")
             
+            # 【修正】数量列を編集可能（editable）に変更
             edited_cart = st.data_editor(
                 calc_df, hide_index=True,
-                column_config={"削除": st.column_config.CheckboxColumn("削除", default=False), "ID": None},
+                column_config={
+                    "削除": st.column_config.CheckboxColumn("削除", default=False), 
+                    "ID": None,
+                    "数量": st.column_config.NumberColumn("数量", min_value=1, step=1)
+                },
                 use_container_width=True
             )
+            
+            # 【新機能】編集された数量を検知してセッションステート（裏側のカート）を更新
+            needs_rerun = False
+            for idx, row in edited_cart.iterrows():
+                item_id = row['ID']
+                new_qty = row['数量']
+                for s_item in st.session_state['cart']:
+                    if s_item['id'] == item_id and s_item['qty'] != new_qty:
+                        s_item['qty'] = new_qty
+                        needs_rerun = True
+            if needs_rerun:
+                st.rerun() # 数量が変更されたら画面を再読み込みして原価を再計算
             
             if edited_cart['削除'].any():
                 if st.button("🗑️ チェックした商品を外す"):
@@ -601,27 +602,42 @@ elif menu == "🛍️ オリパ工場":
             col_list, col_calc = st.columns([1.5, 1])
             with col_list:
                 st.subheader("① 封入するカード・素材の選択")
-                filter_types = st.multiselect("種類で絞り込み (未選択で全表示)", options=df_available['種類'].unique().tolist())
-                if filter_types: df_available = df_available[df_available['種類'].isin(filter_types)]
+                
+                # 【新機能】検索窓を追加
+                c_search, c_filter = st.columns([1.5, 1])
+                with c_search:
+                    search_oripa = st.text_input("🔍 商品名で検索", placeholder="例: ピカチュウ, VSTARユニバース")
+                with c_filter:
+                    filter_types = st.multiselect("種類で絞り込み", options=df_available['種類'].unique().tolist())
+                
+                # 検索と絞り込みの適用
+                if search_oripa:
+                    df_available = df_available[df_available['商品名'].str.contains(search_oripa, case=False, na=False)]
+                if filter_types:
+                    df_available = df_available[df_available['種類'].isin(filter_types)]
                 
                 df_available['オリパに使う'] = False
                 df_available['使用数'] = 0
                 
-                oripa_editor = st.data_editor(
-                    df_available[['オリパに使う', '商品名', '種類', '原価', '在庫数', '使用数', 'ID']],
-                    hide_index=True,
-                    column_config={
-                        "オリパに使う": st.column_config.CheckboxColumn("選択", default=False, width="small"),
-                        "商品名": st.column_config.TextColumn("商品名", disabled=True),
-                        "種類": st.column_config.TextColumn("種類", disabled=True, width="small"),
-                        "原価": st.column_config.NumberColumn("原価", disabled=True, format="¥%d", width="small"),
-                        "在庫数": st.column_config.NumberColumn("現在庫", disabled=True, width="small"),
-                        "使用数": st.column_config.NumberColumn("使う数", min_value=0, step=1, width="small"),
-                        "ID": None
-                    },
-                    use_container_width=True
-                )
-                selected_items = oripa_editor[(oripa_editor['オリパに使う'] == True) & (oripa_editor['使用数'] > 0)]
+                if not df_available.empty:
+                    oripa_editor = st.data_editor(
+                        df_available[['オリパに使う', '商品名', '種類', '原価', '在庫数', '使用数', 'ID']],
+                        hide_index=True,
+                        column_config={
+                            "オリパに使う": st.column_config.CheckboxColumn("選択", default=False, width="small"),
+                            "商品名": st.column_config.TextColumn("商品名", disabled=True),
+                            "種類": st.column_config.TextColumn("種類", disabled=True, width="small"),
+                            "原価": st.column_config.NumberColumn("原価", disabled=True, format="¥%d", width="small"),
+                            "在庫数": st.column_config.NumberColumn("現在庫", disabled=True, width="small"),
+                            "使用数": st.column_config.NumberColumn("使う数", min_value=0, step=1, width="small"),
+                            "ID": None
+                        },
+                        use_container_width=True
+                    )
+                    selected_items = oripa_editor[(oripa_editor['オリパに使う'] == True) & (oripa_editor['使用数'] > 0)]
+                else:
+                    st.info("該当する在庫がありません。")
+                    selected_items = pd.DataFrame()
             
             with col_calc:
                 st.subheader("② オリパの設定と利益計算")
