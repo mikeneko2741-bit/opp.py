@@ -362,7 +362,7 @@ if menu == "📦 スピード仕入・解体":
                 st.rerun()
 
 # =========================================================
-# 📊 第2フェーズ：在庫・PSA管理 (編集・削除機能追加)
+# 📊 第2フェーズ：在庫・PSA管理
 # =========================================================
 elif menu == "📊 在庫・PSA管理":
     st.header("📊 在庫・PSA管理")
@@ -411,10 +411,17 @@ elif menu == "📊 在庫・PSA管理":
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("##### ⏳ PSA提出中")
-                st.dataframe(df_psa_pending[['商品名', '原価', '仕入日']], hide_index=True) if not df_psa_pending.empty else st.caption("なし")
+                if not df_psa_pending.empty:
+                    st.dataframe(df_psa_pending[['商品名', '原価', '仕入日']], hide_index=True)
+                else:
+                    st.caption("現在、提出中のカードはありません。")
+                    
             with c2:
                 st.markdown("##### ✨ 鑑定済み (ストック)")
-                st.dataframe(df_psa_done[['商品名', '状態_PSA', 'PSA番号', '原価']], hide_index=True) if not df_psa_done.empty else st.caption("なし")
+                if not df_psa_done.empty:
+                    st.dataframe(df_psa_done[['商品名', '状態_PSA', 'PSA番号', '原価']], hide_index=True)
+                else:
+                    st.caption("現在、鑑定済みのカードはありません。")
 
             if not df_psa_pending.empty:
                 st.divider()
@@ -436,21 +443,18 @@ elif menu == "📊 在庫・PSA管理":
                         save_data(df)
                         st.success("登録しました！"); time.sleep(1); st.rerun()
 
-        # 【追加】編集・削除タブ
         with tab_edit:
             st.subheader("✏️ 全在庫データの編集・削除")
             st.warning("⚠️ ここで編集・削除を行うと、データベースが直接書き換えられます。")
-            
             df_edit = df.copy()
             df_edit['削除'] = False
             
-            # 編集可能なエディターを表示
             edited_df = st.data_editor(
                 df_edit[['削除', '商品名', '種類', '在庫数', '原価', 'ステータス', 'ID']],
                 hide_index=True,
                 column_config={
                     "削除": st.column_config.CheckboxColumn("削除", default=False, width="small"),
-                    "ID": None, # IDは隠す
+                    "ID": None,
                     "在庫数": st.column_config.NumberColumn("在庫数", min_value=0, step=1),
                     "原価": st.column_config.NumberColumn("原価", min_value=0, step=100)
                 },
@@ -458,11 +462,8 @@ elif menu == "📊 在庫・PSA管理":
             )
             
             if st.button("💾 変更・削除を保存する", type="primary"):
-                # 削除チェックが入っている行を除外
                 ids_to_keep = edited_df[~edited_df['削除']]['ID'].tolist()
                 df_saved = df[df['ID'].isin(ids_to_keep)].copy()
-                
-                # 編集された数値を反映
                 for idx, row in edited_df.iterrows():
                     if not row['削除']:
                         df_saved.loc[df_saved['ID'] == row['ID'], '在庫数'] = row['在庫数']
@@ -471,11 +472,10 @@ elif menu == "📊 在庫・PSA管理":
                 
                 save_data(df_saved)
                 st.success("✅ データベースを更新しました！")
-                time.sleep(1.5)
-                st.rerun()
+                time.sleep(1.5); st.rerun()
 
 # =========================================================
-# 🛍️ 第3フェーズ：オリパ工場 (NEW)
+# 🛍️ 第3フェーズ：オリパ工場
 # =========================================================
 elif menu == "🛍️ オリパ工場":
     st.header("🛍️ オリパ工場 (セット化・錬金)")
@@ -485,7 +485,6 @@ elif menu == "🛍️ オリパ工場":
     if df.empty:
         st.warning("現在、オリパに使える在庫がありません。")
     else:
-        # 在庫があり、かつ売却済みやPSA提出中でないもの
         df_available = df[(df['ステータス'] == '在庫あり') | (df['ステータス'] == '鑑定済み')].copy()
         
         if df_available.empty:
@@ -497,12 +496,10 @@ elif menu == "🛍️ オリパ工場":
                 st.subheader("① 封入するカード・素材の選択")
                 st.caption("オリパに使用するカードにチェックを入れ、**使用する枚数**を入力してください。")
                 
-                # 種類でフィルターをかけられるようにする
                 filter_types = st.multiselect("種類で絞り込み (未選択で全表示)", options=df_available['種類'].unique().tolist())
                 if filter_types:
                     df_available = df_available[df_available['種類'].isin(filter_types)]
                 
-                # Oripa選択用のUI準備
                 df_available['オリパに使う'] = False
                 df_available['使用数'] = 0
                 
@@ -521,7 +518,6 @@ elif menu == "🛍️ オリパ工場":
                     use_container_width=True
                 )
                 
-                # 選択されたアイテムを抽出
                 selected_items = oripa_editor[(oripa_editor['オリパに使う'] == True) & (oripa_editor['使用数'] > 0)]
             
             with col_calc:
@@ -530,19 +526,14 @@ elif menu == "🛍️ オリパ工場":
                     oripa_name = st.text_input("オリパの名称", placeholder="例: 春の激アツ！1000円オリパ")
                     
                     c_qty, c_price = st.columns(2)
-                    with c_qty:
-                        total_units = st.number_input("作成口数 (全口数)", min_value=1, value=100, step=10)
-                    with c_price:
-                        unit_price = st.number_input("1口の販売価格 (円)", min_value=0, value=1000, step=100)
+                    with c_qty: total_units = st.number_input("作成口数 (全口数)", min_value=1, value=100, step=10)
+                    with c_price: unit_price = st.number_input("1口の販売価格 (円)", min_value=0, value=1000, step=100)
                     
                     st.markdown("##### 📦 個別経費の設定")
                     c_ship, c_pack = st.columns(2)
-                    with c_ship:
-                        shipping_cost = st.number_input("1口あたりの送料", min_value=0, value=185, help="クリックポスト185円など")
-                    with c_pack:
-                        packing_cost = st.number_input("1口あたりの梱包費", min_value=0, value=50, help="スリーブや封筒代など")
+                    with c_ship: shipping_cost = st.number_input("1口あたりの送料", min_value=0, value=185)
+                    with c_pack: packing_cost = st.number_input("1口あたりの梱包費", min_value=0, value=50)
                 
-                # リアルタイム計算
                 if not selected_items.empty:
                     materials_total_cost = sum(selected_items['原価'] * selected_items['使用数'])
                     expenses_total_cost = (shipping_cost + packing_cost) * total_units
@@ -561,7 +552,6 @@ elif menu == "🛍️ オリパ工場":
                     st.metric("見込み売上総額", f"¥{expected_sales:,}")
                     st.metric("見込み純利益 (完売時)", f"¥{expected_profit:,}", delta=f"利益率: {int((expected_profit/expected_sales)*100)}%" if expected_sales>0 else None)
                     
-                    # バリデーション（在庫数より多く使おうとしていないか）
                     is_valid = True
                     for idx, row in selected_items.iterrows():
                         if row['使用数'] > row['在庫数']:
@@ -570,7 +560,6 @@ elif menu == "🛍️ オリパ工場":
                     
                     if is_valid and oripa_name:
                         if st.button("🔨 この内容でオリパを作成 (在庫を消費)", type="primary", use_container_width=True):
-                            # 1. 在庫の引き落とし
                             for idx, row in selected_items.iterrows():
                                 item_id = row['ID']
                                 new_qty = df.loc[df['ID'] == item_id, '在庫数'].values[0] - row['使用数']
@@ -580,7 +569,6 @@ elif menu == "🛍️ オリパ工場":
                                 else:
                                     df.loc[df['ID'] == item_id, '在庫数'] = new_qty
                             
-                            # 2. 完成したオリパを新規在庫として追加
                             new_oripa_id = "O" + str(uuid.uuid4())[:7]
                             new_oripa = pd.DataFrame([{
                                 'ID': new_oripa_id,
@@ -588,8 +576,8 @@ elif menu == "🛍️ オリパ工場":
                                 '種類': 'オリジナルパック',
                                 '状態_PSA': '-',
                                 '仕入日': datetime.now().strftime('%Y-%m-%d'),
-                                '原価': cost_per_unit,  # 経費を含んだ1口あたりの原価！
-                                '参考相場': unit_price, # 想定売値を相場にセット
+                                '原価': cost_per_unit,
+                                '参考相場': unit_price,
                                 '在庫数': total_units,
                                 '仕入元': '自家製',
                                 'ステータス': '在庫あり',
