@@ -60,7 +60,7 @@ def check_and_init_sheets():
         ws_inv = sh.worksheet(SHEET_INVENTORY)
     except:
         ws_inv = sh.add_worksheet(title=SHEET_INVENTORY, rows=1000, cols=15)
-        ws_inv.append_row(['ID', '商品名', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス'])
+        ws_inv.append_row(['ID', '商品名', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号'])
 
     try:
         ws_pur = sh.worksheet(SHEET_PURCHASE)
@@ -84,6 +84,15 @@ def load_data():
             df = get_as_dataframe(ws_inv, evaluate_formulas=True)
             df = df.dropna(subset=['ID'])
             df = df[df['ID'] != '']
+            
+            if 'PSA番号' not in df.columns:
+                df['PSA番号'] = ""
+            
+            df['原価'] = pd.to_numeric(df['原価'], errors='coerce').fillna(0).astype(int)
+            df['参考相場'] = pd.to_numeric(df['参考相場'], errors='coerce').fillna(0).astype(int)
+            df['在庫数'] = pd.to_numeric(df['在庫数'], errors='coerce').fillna(0).astype(int)
+            df['PSA番号'] = df['PSA番号'].astype(str).replace('nan', '')
+            
             return df
         except Exception:
             return pd.DataFrame()
@@ -92,8 +101,16 @@ def load_data():
 def save_data(df):
     ws_inv, _, _ = check_and_init_sheets()
     if ws_inv:
+        save_cols = ['ID', '商品名', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号']
+        
+        df_to_save = df.copy()
+        for col in save_cols:
+            if col not in df_to_save.columns:
+                df_to_save[col] = ""
+        
+        df_to_save = df_to_save[save_cols]
         ws_inv.clear()
-        set_with_dataframe(ws_inv, df)
+        set_with_dataframe(ws_inv, df_to_save)
         load_data.clear()
 
 def record_purchase_batch(batch_id, date, title, total_paid, source, note):
@@ -103,24 +120,50 @@ def record_purchase_batch(batch_id, date, title, total_paid, source, note):
         ws_pur.append_row(row)
 
 # ---------------------------------------------------------
-# 🌐 スクレイピング (画像取得＆ブロック回避対応)
+# 🌐 スクレイピング＆文字列クリーニング (NEW)
 # ---------------------------------------------------------
+def clean_product_name(text):
+    """カードラッシュ特有の余分な装飾を削ぎ落として綺麗な名前にする"""
+    if not isinstance(text, str): return str(text)
+    
+    # {-} 以降（Card Rush特有の管理タグ）を削除
+    text = re.sub(r'\{-}.*$', '', text)
+    # 先頭の〔状態A-〕などを削除
+    text = re.sub(r'^〔[^〕]+〕', '', text)
+    text = re.sub(r'^【[^】]+】', '', text)
+    # 【未開封BOX】などを削除
+    text = re.sub(r'【未開封BOX】', '', text)
+    text = re.sub(r'\[[^\]]+\]', '', text)
+    
+    # BOXの場合、「拡張パック『〇〇』」の〇〇だけを抽出する
+    match = re.search(r'『([^』]+)』', text)
+    if match:
+        text = match.group(1)
+        
+    return text.strip()
+
 def fetch_from_url(url):
     results = []
     try:
-        # カードラッシュのブロックを回避するための詳細なヘッダー（v2.1と同じものに復旧）
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"}
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = "utf-8"
         soup = BeautifulSoup(res.content, 'html.parser')
         
-        # 検索結果のすべてのパターンを網羅
         items = soup.select('.item_box, .goods_box, .item_data, .sys_item_row, .search_result_item')
         
         for item in items:
             name_tag = item.select_one('.item_name, .goods_name, .name')
             if not name_tag: continue
-            name = name_tag.get_text(strip=True)
+            raw_name = name_tag.get_text(strip=True)
+            
+            # BOXかどうかの判定と名前のクリーニング
+            is_box = "BOX" in raw_name.upper() or "ｂｏｘ" in raw_name.lower()
+            clean_name = clean_product_name(raw_name)
+            
+            # 元々BOXだったなら、綺麗にした名前に「 BOX」を付け直す
+            if is_box and "BOX" not in clean_name.upper():
+                clean_name = f"{clean_name} BOX"
             
             price = 0
             price_tag = item.select_one('.figure, .price, .goods_price')
@@ -128,7 +171,6 @@ def fetch_from_url(url):
                 nums = re.findall(r'\d+', price_tag.get_text(strip=True).replace(',', ''))
                 if nums: price = int(nums[0])
             
-            # 画像URLの取得
             img_url = ""
             img_tag = item.select_one('img')
             if img_tag and 'src' in img_tag.attrs:
@@ -137,9 +179,8 @@ def fetch_from_url(url):
                     img_url = "https://www.cardrush-pokemon.jp" + img_url
 
             if price > 0:
-                results.append({"name": name, "price": price, "image": img_url})
+                results.append({"name": clean_name, "price": price, "image": img_url})
         
-        # 重複削除
         unique_results = []
         seen = set()
         for r in results:
@@ -153,7 +194,6 @@ def fetch_from_url(url):
 def search_card_rush(keyword):
     base_url = "https://www.cardrush-pokemon.jp"
     encoded_keyword = quote(keyword.encode('utf-8'))
-    # まず商品リスト検索、ダメならショップ検索のハイブリッド
     url_a = f"{base_url}/product-list?keyword={encoded_keyword}&num=50"
     results = fetch_from_url(url_a)
     if not results:
@@ -167,11 +207,8 @@ def search_card_rush(keyword):
 st.set_page_config(page_title="ぽっけぇ〜道 システム", layout="wide")
 st.title("🎴 ぽっけぇ〜道 管理システム v3.0")
 
-# セッションステート（カート等）の初期化
-if 'cart' not in st.session_state:
-    st.session_state['cart'] = []
-if 'has_searched' not in st.session_state:
-    st.session_state['has_searched'] = False
+if 'cart' not in st.session_state: st.session_state['cart'] = []
+if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
 
 menu = st.sidebar.radio(
     "【作業メニュー】", 
@@ -184,12 +221,8 @@ if menu == "📦 スピード仕入・解体":
     
     col_left, col_right = st.columns([1.2, 1])
     
-    # -----------------------------
-    # 左側：カートに入れる（検索・追加）
-    # -----------------------------
     with col_left:
         st.subheader("① 商品を探してカートに入れる")
-        
         tab_search, tab_bulk, tab_supply = st.tabs(["🔍 カード/BOX検索", "🗃️ 素材(バルク)", "📦 サプライ品"])
         
         with tab_search:
@@ -199,11 +232,10 @@ if menu == "📦 スピード仕入・解体":
                     with st.spinner("カードラッシュを検索中..."):
                         res = search_card_rush(search_word)
                         st.session_state['search_res'] = res
-                        st.session_state['has_searched'] = True # 検索を実行したという目印
+                        st.session_state['has_searched'] = True
                 else:
                     st.warning("キーワードを入力してください。")
             
-            # 検索結果の表示ロジックを改善
             if st.session_state.get('has_searched'):
                 if st.session_state.get('search_res'):
                     st.write("---")
@@ -216,7 +248,6 @@ if menu == "📦 スピード仕入・解体":
                             st.write(f"**{item['name']}**")
                             st.caption(f"相場: ¥{item['price']:,}")
                         with c3:
-                            # 追加フォーム
                             with st.popover("カートに追加"):
                                 add_qty = st.number_input("枚数/個数", min_value=1, value=1, key=f"qty_{item['name']}")
                                 add_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"cond_{item['name']}")
@@ -224,7 +255,7 @@ if menu == "📦 スピード仕入・解体":
                                     st.session_state['cart'].append({
                                         "id": str(uuid.uuid4())[:8],
                                         "name": item['name'],
-                                        "type": "未開封BOX" if "BOX" in item['name'] else "シングルカード",
+                                        "type": "未開封BOX" if "BOX" in item['name'].upper() else "シングルカード",
                                         "cond": add_cond,
                                         "qty": add_qty,
                                         "market_price": item['price']
@@ -234,7 +265,7 @@ if menu == "📦 スピード仕入・解体":
                                     st.rerun()
                     st.write("---")
                 else:
-                    st.error("見つかりませんでした。別のキーワード（ひらがなにする、スペースをあける等）で試してください。")
+                    st.error("見つかりませんでした。別のキーワードで試してください。")
         
         with tab_bulk:
             st.info("オリパ作成用のハズレ枠素材を一括追加します。")
@@ -273,15 +304,12 @@ if menu == "📦 スピード仕入・解体":
                 else:
                     st.warning("品名を入力してください")
 
-    # -----------------------------
-    # 右側：カートの確認と原価計算
-    # -----------------------------
     with col_right:
         st.subheader("② カートの中身と原価計算")
         
         with st.container(border=True):
             st.markdown("##### 🧾 今回の支払い情報")
-            total_paid = st.number_input("支払った総額 (送料・手数料込み)", min_value=0, value=0, step=1000, help="福袋の金額や、まとめ買いで払ったトータル金額を入力してください。")
+            total_paid = st.number_input("支払った総額 (送料・手数料込み)", min_value=0, value=0, step=1000)
             purchase_title = st.text_input("仕入名目 (任意)", placeholder="例: 秋葉原福袋, メルカリまとめ売り")
             purchase_source = st.selectbox("仕入先", ["店舗", "フリマ(メルカリ等)", "オンラインオリパ", "問屋", "その他"])
             
@@ -289,19 +317,15 @@ if menu == "📦 スピード仕入・解体":
         if not st.session_state['cart']:
             st.caption("カートは空です。左から商品を追加してください。")
         else:
-            cart_df = pd.DataFrame(st.session_state['cart'])
-            
-            # 【キモ】相場比率による原価の自動按分計算
             total_market_value = sum(item['qty'] * item['market_price'] for item in st.session_state['cart'])
             
             calculated_cart = []
             for item in st.session_state['cart']:
                 item_total_market = item['qty'] * item['market_price']
-                
                 if total_market_value > 0:
                     ratio = item_total_market / total_market_value
                     allocated_cost_total = total_paid * ratio
-                    unit_cost = int(allocated_cost_total / item['qty']) # 1個あたりの原価
+                    unit_cost = int(allocated_cost_total / item['qty'])
                 else:
                     unit_cost = 0
                 
@@ -346,7 +370,6 @@ if menu == "📦 スピード仕入・解体":
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
                 new_inventory_rows = []
-                
                 for idx, row in edited_cart.iterrows():
                     item_id = row['ID']
                     original_item = next(item for item in st.session_state['cart'] if item['id'] == item_id)
@@ -362,7 +385,8 @@ if menu == "📦 スピード仕入・解体":
                             '参考相場': row['参考相場'],
                             '在庫数': row['数量'],
                             '仕入元': purchase_source,
-                            'ステータス': '在庫あり'
+                            'ステータス': '在庫あり',
+                            'PSA番号': ''
                         })
                 
                 if new_inventory_rows:
@@ -384,9 +408,115 @@ if menu == "📦 スピード仕入・解体":
                 time.sleep(2)
                 st.rerun()
 
+# =========================================================
+# 📊 第2フェーズ：在庫・PSA管理
+# =========================================================
 elif menu == "📊 在庫・PSA管理":
     st.header("📊 在庫・PSA管理")
-    st.info("💡 ここに「素材」「PSA」「未開封BOX」を分けて表示し、相場確認やPSA費用の後乗せができる機能を実装します。（次回アップデート予定）")
+    df = load_data()
+    
+    if df.empty:
+        st.info("現在、データベースに在庫がありません。「スピード仕入」から商品を登録してください。")
+    else:
+        df_active = df[df['ステータス'] != '売却済み'].copy()
+        
+        tab_singles, tab_box_bulk, tab_psa = st.tabs(["🃏 シングル在庫", "📦 BOX・素材 (平均単価)", "💎 PSA管理"])
+        
+        with tab_singles:
+            st.subheader("🃏 シングルカード在庫 (PSA以外)")
+            df_single = df_active[(df_active['種類'] == 'シングルカード') & 
+                                  (~df_active['ステータス'].isin(['PSA提出中', '鑑定済み']))]
+            
+            if not df_single.empty:
+                st.dataframe(
+                    df_single[['商品名', '状態_PSA', '原価', '在庫数', '仕入日', 'ステータス']], 
+                    use_container_width=True, hide_index=True
+                )
+                
+                st.divider()
+                st.markdown("##### 🚀 PSA鑑定へ提出する")
+                single_options = {f"{row['商品名']} (ID: {row['ID']})": row['ID'] for idx, row in df_single.iterrows()}
+                target_to_psa = st.selectbox("提出するカードを選択してください", options=list(single_options.keys()), index=None)
+                
+                if target_to_psa and st.button("✈️ 選択したカードを「PSA提出中」にする", type="primary"):
+                    target_id = single_options[target_to_psa]
+                    df.loc[df['ID'] == target_id, 'ステータス'] = 'PSA提出中'
+                    save_data(df)
+                    st.success("PSA提出中に変更しました！")
+                    time.sleep(1)
+                    st.rerun()
+            else:
+                st.caption("現在、該当するシングルカードの在庫はありません。")
+
+        with tab_box_bulk:
+            st.subheader("📦 未開封BOX・素材 (自動平均化)")
+            st.write("別々に仕入れた同じBOXや素材も、ここで自動的に合算され「平均原価」として表示されます。")
+            
+            df_bb = df_active[df_active['種類'].isin(['未開封BOX', '素材・バルク'])].copy()
+            
+            if not df_bb.empty:
+                df_bb['総原価'] = df_bb['原価'] * df_bb['在庫数']
+                grouped = df_bb.groupby(['種類', '商品名']).agg(
+                    合計在庫数=('在庫数', 'sum'),
+                    合計総原価=('総原価', 'sum')
+                ).reset_index()
+                
+                grouped['平均単価(原価)'] = (grouped['合計総原価'] / grouped['合計在庫数']).fillna(0).astype(int)
+                
+                st.dataframe(
+                    grouped[['種類', '商品名', '合計在庫数', '平均単価(原価)']], 
+                    use_container_width=True, hide_index=True
+                )
+            else:
+                st.caption("現在、未開封BOXや素材の在庫はありません。")
+
+        with tab_psa:
+            st.subheader("💎 PSA管理 (提出中・鑑定済み)")
+            
+            df_psa_pending = df_active[df_active['ステータス'] == 'PSA提出中']
+            df_psa_done = df_active[df_active['ステータス'] == '鑑定済み']
+            
+            col_p1, col_p2 = st.columns(2)
+            
+            with col_p1:
+                st.markdown("##### ⏳ PSA提出中")
+                if not df_psa_pending.empty:
+                    st.dataframe(df_psa_pending[['商品名', '原価', '仕入日']], hide_index=True, use_container_width=True)
+                else:
+                    st.caption("現在、提出中のカードはありません。")
+                    
+            with col_p2:
+                st.markdown("##### ✨ 鑑定済み (ストック)")
+                if not df_psa_done.empty:
+                    st.dataframe(df_psa_done[['商品名', '状態_PSA', 'PSA番号', '原価']], hide_index=True, use_container_width=True)
+                else:
+                    st.caption("現在、鑑定済みのカードはありません。")
+
+            st.divider()
+            
+            if not df_psa_pending.empty:
+                st.markdown("##### 📥 鑑定結果の登録（原価への費用加算）")
+                psa_options = {f"{row['商品名']} (ID: {row['ID']})": row['ID'] for idx, row in df_psa_pending.iterrows()}
+                
+                with st.form("psa_return_form"):
+                    target_return = st.selectbox("戻ってきたカードを選択", options=list(psa_options.keys()))
+                    
+                    c1, c2, c3 = st.columns(3)
+                    with c1: grade = st.selectbox("鑑定結果 (グレード)", ["10", "9", "8", "7以下"])
+                    with c2: cert = st.text_input("PSA証明番号 (Cert #)", placeholder="例: 12345678")
+                    with c3: fee = st.number_input("かかった鑑定費用 (円)", min_value=0, value=3300, step=100)
+                    
+                    if st.form_submit_button("鑑定結果を登録して原価を更新", type="primary"):
+                        target_id = psa_options[target_return]
+                        df.loc[df['ID'] == target_id, '原価'] += fee
+                        df.loc[df['ID'] == target_id, 'ステータス'] = '鑑定済み'
+                        df.loc[df['ID'] == target_id, '状態_PSA'] = f"PSA {grade}"
+                        df.loc[df['ID'] == target_id, 'PSA番号'] = cert
+                        
+                        save_data(df)
+                        st.success(f"鑑定結果を登録しました！原価に {fee}円 を加算しました。")
+                        time.sleep(1.5)
+                        st.rerun()
 
 elif menu == "🛍️ オリパ工場":
     st.header("🛍️ オリパ工場")
