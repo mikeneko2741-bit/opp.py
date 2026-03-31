@@ -345,7 +345,6 @@ if menu == "📦 スピード仕入・解体":
             calc_df = pd.DataFrame(calculated_cart)
             st.write(f"💡 カート内の相場合計: **¥{total_market_value:,}**")
             
-            # 【修正】数量列を編集可能（editable）に変更
             edited_cart = st.data_editor(
                 calc_df, hide_index=True,
                 column_config={
@@ -356,7 +355,6 @@ if menu == "📦 スピード仕入・解体":
                 use_container_width=True
             )
             
-            # 【新機能】編集された数量を検知してセッションステート（裏側のカート）を更新
             needs_rerun = False
             for idx, row in edited_cart.iterrows():
                 item_id = row['ID']
@@ -366,7 +364,7 @@ if menu == "📦 スピード仕入・解体":
                         s_item['qty'] = new_qty
                         needs_rerun = True
             if needs_rerun:
-                st.rerun() # 数量が変更されたら画面を再読み込みして原価を再計算
+                st.rerun()
             
             if edited_cart['削除'].any():
                 if st.button("🗑️ チェックした商品を外す"):
@@ -503,6 +501,43 @@ elif menu == "📊 在庫・PSA管理":
                         save_data(df)
                         st.success("登録しました！"); time.sleep(1); st.rerun()
 
+            # ---------------------------------------------------------
+            # 🆕 新機能：PSAイレギュラー対応（キャンセル・ケース割り）
+            # ---------------------------------------------------------
+            st.divider()
+            st.markdown("##### ⚙️ その他のPSA関連操作")
+            c_cancel, c_crack = st.columns(2)
+            
+            with c_cancel:
+                st.markdown("**❌ 提出のキャンセル**")
+                if not df_psa_pending.empty:
+                    cancel_opts = {f"{row['商品名']} [ID:{row['ID']}]": row['ID'] for idx, row in df_psa_pending.iterrows()}
+                    target_cancel = st.selectbox("キャンセルするカード", options=list(cancel_opts.keys()), key="cancel_psa")
+                    if target_cancel and st.button("通常在庫に戻す", key="btn_cancel"):
+                        df.loc[df['ID'] == cancel_opts[target_cancel], 'ステータス'] = '在庫あり'
+                        save_data(df)
+                        st.success("提出をキャンセルし、通常在庫に戻しました！")
+                        time.sleep(1); st.rerun()
+                else:
+                    st.caption("キャンセル可能なカードはありません。")
+                    
+            with c_crack:
+                st.markdown("**🔨 ケース割り (鑑定済み→通常在庫)**")
+                st.caption("※かかった鑑定費用(原価)はそのまま引き継がれます。")
+                if not df_psa_done.empty:
+                    crack_opts = {f"{row['商品名']} ({row['状態_PSA']}) [ID:{row['ID']}]": row['ID'] for idx, row in df_psa_done.iterrows()}
+                    target_crack = st.selectbox("割るカードを選択", options=list(crack_opts.keys()), key="crack_psa")
+                    if target_crack and st.button("ケースを割って通常在庫へ", key="btn_crack"):
+                        crack_id = crack_opts[target_crack]
+                        df.loc[df['ID'] == crack_id, 'ステータス'] = '在庫あり'
+                        df.loc[df['ID'] == crack_id, '状態_PSA'] = 'A (美品)' # 素体に戻すため状態をリセット
+                        df.loc[df['ID'] == crack_id, 'PSA番号'] = ''
+                        save_data(df)
+                        st.success("通常在庫に戻しました！(状態はAになっています。必要に応じて編集タブで直してください)")
+                        time.sleep(1.5); st.rerun()
+                else:
+                    st.caption("割れるカードはありません。")
+
         with tab_sell:
             st.subheader("🛒 売却レジ (レジ打ち)")
             st.write("在庫から商品を売却し、手数料を自動計算して帳簿に記録します。")
@@ -602,19 +637,12 @@ elif menu == "🛍️ オリパ工場":
             col_list, col_calc = st.columns([1.5, 1])
             with col_list:
                 st.subheader("① 封入するカード・素材の選択")
-                
-                # 【新機能】検索窓を追加
                 c_search, c_filter = st.columns([1.5, 1])
-                with c_search:
-                    search_oripa = st.text_input("🔍 商品名で検索", placeholder="例: ピカチュウ, VSTARユニバース")
-                with c_filter:
-                    filter_types = st.multiselect("種類で絞り込み", options=df_available['種類'].unique().tolist())
+                with c_search: search_oripa = st.text_input("🔍 商品名で検索", placeholder="例: ピカチュウ, VSTARユニバース")
+                with c_filter: filter_types = st.multiselect("種類で絞り込み", options=df_available['種類'].unique().tolist())
                 
-                # 検索と絞り込みの適用
-                if search_oripa:
-                    df_available = df_available[df_available['商品名'].str.contains(search_oripa, case=False, na=False)]
-                if filter_types:
-                    df_available = df_available[df_available['種類'].isin(filter_types)]
+                if search_oripa: df_available = df_available[df_available['商品名'].str.contains(search_oripa, case=False, na=False)]
+                if filter_types: df_available = df_available[df_available['種類'].isin(filter_types)]
                 
                 df_available['オリパに使う'] = False
                 df_available['使用数'] = 0
