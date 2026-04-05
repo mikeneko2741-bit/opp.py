@@ -224,19 +224,29 @@ def fetch_from_url(url):
                 nums = re.findall(r'\d+', price_tag.get_text(strip=True).replace(',', ''))
                 if nums: price = int(nums[0])
             
-            # 🆕 画像取得の強化：ダミー画像を回避して本物のURLを狙い撃ち
+            # 🆕 画像取得の究極強化：すべての画像をチェックし、アイコンやダミーを完全に除外するスナイパー方式
             img_url = ""
-            img_tag = item.select_one('img')
-            if img_tag:
+            img_tags = item.select('img')
+            for img in img_tags:
+                temp_url = ""
+                # data-original や data-src に本物が隠れていることが多いので優先
                 for attr in ['data-original', 'data-src', 'src']:
-                    if attr in img_tag.attrs:
-                        temp_url = img_tag[attr]
-                        if "spacer" not in temp_url.lower() and "blank" not in temp_url.lower():
-                            img_url = temp_url
-                            break
+                    if attr in img.attrs and img[attr]:
+                        temp_url = img[attr]
+                        break
+                
+                if temp_url:
+                    t_lower = temp_url.lower()
+                    # ダミーやアイコン特有のキーワードが含まれていたらスキップ（次を探す）
+                    if any(bad_word in t_lower for bad_word in ["spacer", "blank", "icon", "ranking", "mark", "sold"]):
+                        continue
+                    
+                    # 網をくぐり抜けたURLこそが本物の商品画像！
+                    img_url = temp_url
+                    break
                             
-                if img_url.startswith('/'): 
-                    img_url = "https://www.cardrush-pokemon.jp" + img_url
+            if img_url.startswith('/'): 
+                img_url = "https://www.cardrush-pokemon.jp" + img_url
 
             if price > 0:
                 results.append({"name": clean_name, "pack": pack_code, "price": price, "image": img_url})
@@ -298,7 +308,6 @@ if menu == "📦 スピード仕入・解体":
             
             if st.session_state.get('has_searched'):
                 if st.session_state.get('search_res'):
-                    # 🆕 並び替え（ソート）UIを追加
                     sort_order = st.selectbox("並び替え", ["おすすめ順", "価格の高い順", "価格の安い順"])
                     
                     display_res = list(st.session_state['search_res'])
@@ -765,7 +774,7 @@ elif menu == "🛍️ オリパ工場":
                     expected_profit = expected_sales - grand_total_cost
                     
                     st.write(f"🃏 カード原価合計: **¥{materials_total_cost:,}**")
-                    st.write(f"📦 経費合計(送料+梱包): **¥{expenses_total_cost:,}**")
+                    st.write(f"📦 経経費合計(送料+梱包): **¥{expenses_total_cost:,}**")
                     st.write(f"💰 総原価: **¥{grand_total_cost:,}** (1口あたり: ¥{cost_per_unit:,})")
                     st.divider()
                     st.metric("見込み売上総額", f"¥{expected_sales:,}")
