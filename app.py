@@ -167,7 +167,7 @@ def record_purchase_items(batch_id, date, title, source, note, items):
                 date,
                 title,
                 item['name'],
-                item.get('pack', ''), # 収録パック
+                item.get('pack', ''),
                 item['type'],
                 item['qty'],
                 item['unit_cost'],
@@ -208,7 +208,6 @@ def fetch_from_url(url):
             if not name_tag: continue
             raw_name = name_tag.get_text(strip=True)
             
-            # 🆕 収録パック（M2a, SV4aなど）の自動抽出
             pack_code = ""
             pack_match = re.search(r'\[([a-zA-Z0-9-]+)\]', raw_name)
             if pack_match:
@@ -225,11 +224,19 @@ def fetch_from_url(url):
                 nums = re.findall(r'\d+', price_tag.get_text(strip=True).replace(',', ''))
                 if nums: price = int(nums[0])
             
+            # 🆕 画像取得の強化：ダミー画像を回避して本物のURLを狙い撃ち
             img_url = ""
             img_tag = item.select_one('img')
-            if img_tag and 'src' in img_tag.attrs:
-                img_url = img_tag['src']
-                if img_url.startswith('/'): img_url = "https://www.cardrush-pokemon.jp" + img_url
+            if img_tag:
+                for attr in ['data-original', 'data-src', 'src']:
+                    if attr in img_tag.attrs:
+                        temp_url = img_tag[attr]
+                        if "spacer" not in temp_url.lower() and "blank" not in temp_url.lower():
+                            img_url = temp_url
+                            break
+                            
+                if img_url.startswith('/'): 
+                    img_url = "https://www.cardrush-pokemon.jp" + img_url
 
             if price > 0:
                 results.append({"name": clean_name, "pack": pack_code, "price": price, "image": img_url})
@@ -291,14 +298,22 @@ if menu == "📦 スピード仕入・解体":
             
             if st.session_state.get('has_searched'):
                 if st.session_state.get('search_res'):
+                    # 🆕 並び替え（ソート）UIを追加
+                    sort_order = st.selectbox("並び替え", ["おすすめ順", "価格の高い順", "価格の安い順"])
+                    
+                    display_res = list(st.session_state['search_res'])
+                    if sort_order == "価格の高い順":
+                        display_res.sort(key=lambda x: x['price'], reverse=True)
+                    elif sort_order == "価格の安い順":
+                        display_res.sort(key=lambda x: x['price'])
+
                     st.write("---")
-                    for item in st.session_state['search_res']:
+                    for item in display_res:
                         c1, c2, c3 = st.columns([1, 3, 2])
                         with c1:
                             if item['image']: st.image(item['image'], width=50)
                             else: st.write("🖼️ 画像なし")
                         with c2:
-                            # パック略号がある場合は表示
                             disp_pack = f" [{item['pack']}]" if item['pack'] else ""
                             st.write(f"**{item['name']}{disp_pack}**")
                             st.caption(f"相場: ¥{item['price']:,}")
@@ -450,7 +465,6 @@ if menu == "📦 スピード仕入・解体":
                     
                     if original_item['type'] != "サプライ":
                         is_merged = False
-                        # 📦 防波堤：名前だけでなく「収録パック」も一致しないと合算しない
                         if item_type in ["未開封BOX", "素材・バルク"] and not df_inv.empty:
                             match_idx = df_inv[(df_inv['商品名'] == item_name) & (df_inv['種類'] == item_type) & (df_inv['収録パック'] == item_pack)].index
                             if len(match_idx) > 0:
