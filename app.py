@@ -65,8 +65,9 @@ def check_and_init_sheets():
     try:
         ws_pur = sh.worksheet(SHEET_PURCHASE)
     except:
-        ws_pur = sh.add_worksheet(title=SHEET_PURCHASE, rows=1000, cols=10)
-        ws_pur.append_row(['ID', '仕入日', '仕入名目', '支払総額', '仕入先', '備考', '登録日時'])
+        # 新しい明細型のヘッダー構造
+        ws_pur = sh.add_worksheet(title=SHEET_PURCHASE, rows=1000, cols=12)
+        ws_pur.append_row(['ID', '仕入日', '仕入名目', '商品名', '種類', '数量', '単価', '小計', '仕入先', '備考', '登録日時'])
 
     try:
         ws_sales = sh.worksheet(SHEET_SALES)
@@ -138,7 +139,6 @@ def save_sales_data(df):
         set_with_dataframe(ws_sales, df_to_save)
         load_sales_data.clear()
 
-# 🆕 新機能：仕入帳の読み込み（エクスポート用）
 @st.cache_data(ttl=60)
 def load_purchase_data():
     _, ws_pur, _ = check_and_init_sheets()
@@ -147,18 +147,39 @@ def load_purchase_data():
             df = get_as_dataframe(ws_pur, evaluate_formulas=True)
             df = df.dropna(subset=['ID'])
             df = df[df['ID'] != '']
-            for col in ['支払総額']:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+            # 互換性のため、新旧の数値列を全て処理
+            for col in ['支払総額', '数量', '単価', '小計']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             return df
         except Exception:
             return pd.DataFrame()
     return pd.DataFrame()
 
-def record_purchase_batch(batch_id, date, title, total_paid, source, note):
+# 🆕 新機能：明細単位での仕入一括書き込み機能
+def record_purchase_items(batch_id, date, title, source, note, items):
     _, ws_pur, _ = check_and_init_sheets()
     if ws_pur:
-        row = [batch_id, date, title, total_paid, source, note, datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
-        ws_pur.append_row(row)
+        rows = []
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        for item in items:
+            row = [
+                f"{batch_id}-{str(uuid.uuid4())[:4]}", # ID
+                date,                                  # 仕入日
+                title,                                 # 仕入名目
+                item['name'],                          # 商品名
+                item['type'],                          # 種類
+                item['qty'],                           # 数量
+                item['unit_cost'],                     # 単価
+                item['subtotal'],                      # 小計
+                source,                                # 仕入先
+                note,                                  # 備考
+                now_str                                # 登録日時
+            ]
+            rows.append(row)
+        if rows:
+            # APIエラーを防ぐため、1回の通信でまとめて書き込む
+            ws_pur.append_rows(rows)
 
 # ---------------------------------------------------------
 # 🌐 スクレイピング＆文字列クリーニング
@@ -338,7 +359,9 @@ if menu == "📦 スピード仕入・解体":
         with st.container(border=True):
             total_paid = st.number_input("支払った総額 (送料・手数料込み)", min_value=0, value=0, step=1000)
             purchase_title = st.text_input("仕入名目 (任意)", placeholder="例: 秋葉原福袋")
-            purchase_source = st.selectbox("仕入先", ["店舗", "フリマ(メルカリ等)", "オンラインオリパ", "問屋", "その他"])
+            
+            # 🆕 選択肢に「自己所有・過去の在庫」を追加
+            purchase_source = st.selectbox("仕入先", ["店舗", "フリマ(メルカリ等)", "オンラインオリパ", "問屋", "自己所有・過去の在庫", "その他"])
             
         if not st.session_state['cart']:
             st.caption("カートは空です。")
@@ -395,6 +418,8 @@ if menu == "📦 スピード仕入・解体":
                 purchase_date = datetime.now().strftime('%Y-%m-%d')
                 
                 new_inventory_rows = []
+                purchase_items_for_log = [] # 仕入帳用の明細リスト
+                
                 for idx, row in edited_cart.iterrows():
                     item_id = row['ID']
                     original_item = next(item for item in st.session_state['cart'] if item['id'] == item_id)
@@ -402,6 +427,15 @@ if menu == "📦 スピード仕入・解体":
                     item_name = row['商品名']
                     new_qty = int(row['数量'])
                     new_cost = int(row['自動計算原価'])
+                    
+                    # 仕入帳への記録用データをストック
+                    purchase_items_for_log.append({
+                        'name': item_name,
+                        'type': item_type,
+                        'qty': new_qty,
+                        'unit_cost': new_cost,
+                        'subtotal': new_qty * new_cost
+                    })
                     
                     if original_item['type'] != "サプライ":
                         is_merged = False
@@ -435,12 +469,14 @@ if menu == "📦 スピード仕入・解体":
                     df_inv = pd.concat([df_inv, new_inv_df], ignore_index=True) if not df_inv.empty else new_inv_df
                 
                 save_data(df_inv)
-                record_title = purchase_title if purchase_title else f"一括仕入 ({len(st.session_state['cart'])}点)"
-                record_purchase_batch(batch_id, purchase_date, record_title, total_paid, purchase_source, "カート一括登録")
+                
+                # 🆕 一括ではなく、アイテムごとの明細として仕入帳に記録
+                record_title = purchase_title if purchase_title else "一括仕入"
+                record_purchase_items(batch_id, purchase_date, record_title, purchase_source, "カート一括登録", purchase_items_for_log)
                 
                 st.session_state['cart'] = []
                 st.session_state['has_searched'] = False
-                st.success("🎉 在庫DBに一括登録しました！")
+                st.success("🎉 在庫DBおよび仕入帳（明細）に登録しました！")
                 time.sleep(1.5); st.rerun()
 
 # =========================================================
@@ -818,9 +854,6 @@ elif menu == "📖 帳簿・分析":
         else:
             st.caption("取り消せる売上記録がありません。")
 
-    # ---------------------------------------------------------
-    # 🆕 新機能：データ出力（エクスポート）機能
-    # ---------------------------------------------------------
     with tab_export:
         st.subheader("📤 データのエクスポート (CSVダウンロード)")
         st.info("Excelで文字化けせずに直接開ける形式でダウンロードされます。")
@@ -842,7 +875,6 @@ elif menu == "📖 帳簿・分析":
             start_str = start_date.strftime('%Y-%m-%d')
             end_str = end_date.strftime('%Y-%m-%d')
 
-            # 売上帳のエクスポート
             with c_dl1:
                 if not df_sales.empty:
                     filtered_sales = df_sales[(df_sales['売却日'] >= start_str) & (df_sales['売却日'] <= end_str)]
@@ -854,7 +886,6 @@ elif menu == "📖 帳簿・分析":
                 else:
                     st.caption("売上データがありません")
 
-            # 仕入帳のエクスポート
             with c_dl2:
                 df_pur = load_purchase_data()
                 if not df_pur.empty:
