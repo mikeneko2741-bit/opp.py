@@ -138,6 +138,22 @@ def save_sales_data(df):
         set_with_dataframe(ws_sales, df_to_save)
         load_sales_data.clear()
 
+# 🆕 新機能：仕入帳の読み込み（エクスポート用）
+@st.cache_data(ttl=60)
+def load_purchase_data():
+    _, ws_pur, _ = check_and_init_sheets()
+    if ws_pur:
+        try:
+            df = get_as_dataframe(ws_pur, evaluate_formulas=True)
+            df = df.dropna(subset=['ID'])
+            df = df[df['ID'] != '']
+            for col in ['支払総額']:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+            return df
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
 def record_purchase_batch(batch_id, date, title, total_paid, source, note):
     _, ws_pur, _ = check_and_init_sheets()
     if ws_pur:
@@ -501,9 +517,6 @@ elif menu == "📊 在庫・PSA管理":
                         save_data(df)
                         st.success("登録しました！"); time.sleep(1); st.rerun()
 
-            # ---------------------------------------------------------
-            # 🆕 新機能：PSAイレギュラー対応（キャンセル・ケース割り）
-            # ---------------------------------------------------------
             st.divider()
             st.markdown("##### ⚙️ その他のPSA関連操作")
             c_cancel, c_crack = st.columns(2)
@@ -530,10 +543,10 @@ elif menu == "📊 在庫・PSA管理":
                     if target_crack and st.button("ケースを割って通常在庫へ", key="btn_crack"):
                         crack_id = crack_opts[target_crack]
                         df.loc[df['ID'] == crack_id, 'ステータス'] = '在庫あり'
-                        df.loc[df['ID'] == crack_id, '状態_PSA'] = 'A (美品)' # 素体に戻すため状態をリセット
+                        df.loc[df['ID'] == crack_id, '状態_PSA'] = 'A (美品)'
                         df.loc[df['ID'] == crack_id, 'PSA番号'] = ''
                         save_data(df)
-                        st.success("通常在庫に戻しました！(状態はAになっています。必要に応じて編集タブで直してください)")
+                        st.success("通常在庫に戻しました！")
                         time.sleep(1.5); st.rerun()
                 else:
                     st.caption("割れるカードはありません。")
@@ -725,7 +738,7 @@ elif menu == "🛍️ オリパ工場":
                             st.success(f"🎉 オリパが完成しました！"); time.sleep(2); st.rerun()
 
 # =========================================================
-# 📖 第4フェーズ：帳簿・分析
+# 📖 第4フェーズ：帳簿・分析 ＋ 📤 エクスポート機能
 # =========================================================
 elif menu == "📖 帳簿・分析":
     st.header("📖 帳簿・分析 (ダッシュボード)")
@@ -733,7 +746,7 @@ elif menu == "📖 帳簿・分析":
     df_inv = load_data()
     df_sales = load_sales_data()
     
-    tab_dash, tab_sales, tab_undo = st.tabs(["📈 資産・利益ダッシュボード", "📒 売上帳一覧", "↩️ 売上取消(Undo)"])
+    tab_dash, tab_sales, tab_undo, tab_export = st.tabs(["📈 資産・利益ダッシュボード", "📒 売上帳一覧", "↩️ 売上取消(Undo)", "📤 データ出力 (エクスポート)"])
     
     with tab_dash:
         st.subheader("💰 現在の資産状況")
@@ -804,3 +817,64 @@ elif menu == "📖 帳簿・分析":
                 st.rerun()
         else:
             st.caption("取り消せる売上記録がありません。")
+
+    # ---------------------------------------------------------
+    # 🆕 新機能：データ出力（エクスポート）機能
+    # ---------------------------------------------------------
+    with tab_export:
+        st.subheader("📤 データのエクスポート (CSVダウンロード)")
+        st.info("Excelで文字化けせずに直接開ける形式でダウンロードされます。")
+
+        st.markdown("##### 📅 期間指定ダウンロード (確定申告・月次集計用)")
+        c_start, c_end = st.columns(2)
+        today = datetime.now().date()
+        first_day = today.replace(day=1)
+        
+        with c_start:
+            start_date = st.date_input("開始日", value=first_day)
+        with c_end:
+            end_date = st.date_input("終了日", value=today)
+
+        if start_date > end_date:
+            st.error("エラー: 開始日は終了日より前の日付を指定してください。")
+        else:
+            c_dl1, c_dl2 = st.columns(2)
+            start_str = start_date.strftime('%Y-%m-%d')
+            end_str = end_date.strftime('%Y-%m-%d')
+
+            # 売上帳のエクスポート
+            with c_dl1:
+                if not df_sales.empty:
+                    filtered_sales = df_sales[(df_sales['売却日'] >= start_str) & (df_sales['売却日'] <= end_str)]
+                    if not filtered_sales.empty:
+                        csv_sales = filtered_sales.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(label="📥 指定期間の【売上帳】をダウンロード", data=csv_sales, file_name=f"売上帳_{start_str}_to_{end_str}.csv", mime='text/csv', key='dl_sales', use_container_width=True)
+                    else:
+                        st.button("📥 指定期間の【売上帳】をダウンロード", disabled=True, help="この期間のデータはありません", key='dl_sales_dis', use_container_width=True)
+                else:
+                    st.caption("売上データがありません")
+
+            # 仕入帳のエクスポート
+            with c_dl2:
+                df_pur = load_purchase_data()
+                if not df_pur.empty:
+                    filtered_pur = df_pur[(df_pur['仕入日'] >= start_str) & (df_pur['仕入日'] <= end_str)]
+                    if not filtered_pur.empty:
+                        csv_pur = filtered_pur.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(label="📥 指定期間の【仕入帳】をダウンロード", data=csv_pur, file_name=f"仕入帳_{start_str}_to_{end_str}.csv", mime='text/csv', key='dl_pur', use_container_width=True)
+                    else:
+                        st.button("📥 指定期間の【仕入帳】をダウンロード", disabled=True, help="この期間のデータはありません", key='dl_pur_dis', use_container_width=True)
+                else:
+                    st.caption("仕入データがありません")
+
+        st.divider()
+        st.markdown("##### 📦 現在の在庫一覧ダウンロード (棚卸し・資産確認用)")
+        if not df_inv.empty:
+            inventory_active = df_inv[df_inv['ステータス'] != '売却済み']
+            if not inventory_active.empty:
+                csv_inv = inventory_active.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(label="📦 現在の【在庫一覧】をまるごとダウンロード", data=csv_inv, file_name=f"在庫棚卸表_{today.strftime('%Y%m%d')}.csv", mime='text/csv', key='dl_inv', type="primary")
+            else:
+                st.caption("有効な在庫がありません。")
+        else:
+            st.caption("在庫データがありません。")
