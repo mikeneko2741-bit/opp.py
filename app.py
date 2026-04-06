@@ -224,12 +224,10 @@ def fetch_from_url(url):
                 nums = re.findall(r'\d+', price_tag.get_text(strip=True).replace(',', ''))
                 if nums: price = int(nums[0])
             
-            # 🆕 画像取得の究極強化：すべての画像をチェックし、アイコンやダミーを完全に除外するスナイパー方式
             img_url = ""
             img_tags = item.select('img')
             for img in img_tags:
                 temp_url = ""
-                # data-original や data-src に本物が隠れていることが多いので優先
                 for attr in ['data-original', 'data-src', 'src']:
                     if attr in img.attrs and img[attr]:
                         temp_url = img[attr]
@@ -237,19 +235,30 @@ def fetch_from_url(url):
                 
                 if temp_url:
                     t_lower = temp_url.lower()
-                    # ダミーやアイコン特有のキーワードが含まれていたらスキップ（次を探す）
                     if any(bad_word in t_lower for bad_word in ["spacer", "blank", "icon", "ranking", "mark", "sold"]):
                         continue
-                    
-                    # 網をくぐり抜けたURLこそが本物の商品画像！
                     img_url = temp_url
                     break
                             
             if img_url.startswith('/'): 
                 img_url = "https://www.cardrush-pokemon.jp" + img_url
 
+            # 🆕 商品ページへのURLリンクを自動取得
+            product_url = ""
+            a_tag = item.find('a')
+            if a_tag and 'href' in a_tag.attrs:
+                product_url = a_tag['href']
+                if product_url.startswith('/'):
+                    product_url = "https://www.cardrush-pokemon.jp" + product_url
+
             if price > 0:
-                results.append({"name": clean_name, "pack": pack_code, "price": price, "image": img_url})
+                results.append({
+                    "name": clean_name, 
+                    "pack": pack_code, 
+                    "price": price, 
+                    "image": img_url,
+                    "url": product_url # 取得したURLを格納
+                })
         
         unique_results = []
         seen = set()
@@ -324,7 +333,11 @@ if menu == "📦 スピード仕入・解体":
                             else: st.write("🖼️ 画像なし")
                         with c2:
                             disp_pack = f" [{item['pack']}]" if item['pack'] else ""
-                            st.write(f"**{item['name']}{disp_pack}**")
+                            # 🆕 商品名をクリッカブルリンクとして表示
+                            if item.get('url'):
+                                st.markdown(f"**[{item['name']}{disp_pack}]({item['url']})**")
+                            else:
+                                st.write(f"**{item['name']}{disp_pack}**")
                             st.caption(f"相場: ¥{item['price']:,}")
                         with c3:
                             with st.popover("カートに追加"):
@@ -774,7 +787,7 @@ elif menu == "🛍️ オリパ工場":
                     expected_profit = expected_sales - grand_total_cost
                     
                     st.write(f"🃏 カード原価合計: **¥{materials_total_cost:,}**")
-                    st.write(f"📦 経経費合計(送料+梱包): **¥{expenses_total_cost:,}**")
+                    st.write(f"📦 経費合計(送料+梱包): **¥{expenses_total_cost:,}**")
                     st.write(f"💰 総原価: **¥{grand_total_cost:,}** (1口あたり: ¥{cost_per_unit:,})")
                     st.divider()
                     st.metric("見込み売上総額", f"¥{expected_sales:,}")
