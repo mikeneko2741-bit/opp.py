@@ -16,6 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 # ⚙️ 設定・定数 (v3.0)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
+# ※裏側のファイル名は接続維持のため変更していません
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
 
 SHEET_INVENTORY = '在庫DB'
@@ -186,12 +187,6 @@ def record_purchase_items(batch_id, date, title, source, note, items):
 def clean_product_name(text):
     if not isinstance(text, str): return str(text)
     text = re.sub(r'\{-}.*$', '', text)
-    text = re.sub(r'^〔[^〕]+〕', '', text)
-    text = re.sub(r'^【[^】]+】', '', text)
-    text = re.sub(r'【未開封BOX】', '', text)
-    text = re.sub(r'\[[^\]]+\]', '', text)
-    match = re.search(r'『([^』]+)』', text)
-    if match: text = match.group(1)
     return text.strip()
 
 def fetch_from_url(url):
@@ -243,10 +238,9 @@ def fetch_from_url(url):
             if img_url.startswith('/'): 
                 img_url = "https://www.cardrush-pokemon.jp" + img_url
 
-            # 🆕 商品ページへのURLリンクを自動取得
             product_url = ""
-            a_tag = item.find('a')
-            if a_tag and 'href' in a_tag.attrs:
+            a_tag = item.select_one('a[href]')
+            if a_tag:
                 product_url = a_tag['href']
                 if product_url.startswith('/'):
                     product_url = "https://www.cardrush-pokemon.jp" + product_url
@@ -257,15 +251,17 @@ def fetch_from_url(url):
                     "pack": pack_code, 
                     "price": price, 
                     "image": img_url,
-                    "url": product_url # 取得したURLを格納
+                    "url": product_url
                 })
         
         unique_results = []
-        seen = set()
+        seen_urls = set()
         for r in results:
-            if r['name'] not in seen:
+            identifier = r['url'] if r['url'] else r['name']
+            if identifier not in seen_urls:
                 unique_results.append(r)
-                seen.add(r['name'])
+                seen_urls.add(identifier)
+                
         return unique_results
     except Exception:
         return []
@@ -278,13 +274,14 @@ def search_card_rush(keyword):
     if not results:
         url_b = f"{base_url}/shop/shopbrand.html?search={encoded_keyword}"
         results = fetch_from_url(url_b)
-    return results[:20]
+    return results
 
 # ---------------------------------------------------------
 # 🖥️ アプリ画面 (v3.0)
 # ---------------------------------------------------------
-st.set_page_config(page_title="ぽっけぇ〜道 システム", layout="wide")
-st.title("🎴 ぽっけぇ〜道 管理システム v3.0")
+# 🆕 UI表記を「ぽっけぇ～道」に統一
+st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
+st.title("🎴 ぽっけぇ～道 管理システム v3.0")
 
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
@@ -333,17 +330,17 @@ if menu == "📦 スピード仕入・解体":
                             else: st.write("🖼️ 画像なし")
                         with c2:
                             disp_pack = f" [{item['pack']}]" if item['pack'] else ""
-                            # 🆕 商品名をクリッカブルリンクとして表示
+                            safe_name = item['name'].replace('<', '&lt;').replace('>', '&gt;')
                             if item.get('url'):
-                                st.markdown(f"**[{item['name']}{disp_pack}]({item['url']})**")
+                                st.markdown(f'<a href="{item["url"]}" target="_blank" style="font-weight: bold; color: #1f77b4; text-decoration: none;">{safe_name}{disp_pack}</a>', unsafe_allow_html=True)
                             else:
                                 st.write(f"**{item['name']}{disp_pack}**")
                             st.caption(f"相場: ¥{item['price']:,}")
                         with c3:
                             with st.popover("カートに追加"):
-                                add_qty = st.number_input("枚数/個数", min_value=1, value=1, key=f"qty_{item['name']}")
-                                add_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"cond_{item['name']}")
-                                if st.button("追加する", key=f"add_{item['name']}", use_container_width=True):
+                                add_qty = st.number_input("枚数/個数", min_value=1, value=1, key=f"qty_{item['url']}_{item['name']}")
+                                add_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"cond_{item['url']}_{item['name']}")
+                                if st.button("追加する", key=f"add_{item['url']}_{item['name']}", use_container_width=True):
                                     st.session_state['cart'].append({
                                         "id": str(uuid.uuid4())[:8], 
                                         "name": item['name'],
