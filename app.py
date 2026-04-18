@@ -13,7 +13,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.0)
+# ⚙️ 設定・定数 (v4.1)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -205,13 +205,13 @@ def recalculate_moving_average_costs():
     for _, row in df_pur.iterrows():
         events.append({
             'time': row['登録日時'], 'type': 'pur', 
-            'name': row['商品名'], 'pack': row.get('収録パック', ''),
+            'name': str(row['商品名']).strip(), 'pack': str(row.get('収録パック', '')).strip(),
             'qty': int(row['数量']), 'subtotal': int(row['小計'])
         })
     for _, row in df_sales.iterrows():
         events.append({
             'time': row['登録日時'], 'type': 'sale', 
-            'name': row['商品名'], 'pack': row.get('収録パック', ''),
+            'name': str(row['商品名']).strip(), 'pack': str(row.get('収録パック', '')).strip(),
             'qty': int(row['売却数'])
         })
         
@@ -233,7 +233,7 @@ def recalculate_moving_average_costs():
             if state['qty'] < 0: state['qty'] = 0
             
     for idx, row in df_inv.iterrows():
-        key = (row['商品名'], row.get('収録パック', ''))
+        key = (str(row['商品名']).strip(), str(row.get('収録パック', '')).strip())
         if key in history:
             df_inv.at[idx, '原価'] = history[key]['cost']
             
@@ -329,14 +329,13 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.0)
+# 🖥️ アプリ画面 (v4.1)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.0")
+st.title("🎴 ぽっけぇ～道 管理システム v4.1")
 
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
-# 🆕 修正：ルール違反を避けるため、入力欄をまっさらにするためのキーカウンターを用意
 if 'reset_key' not in st.session_state: st.session_state['reset_key'] = 0
 
 menu = st.sidebar.radio(
@@ -455,7 +454,6 @@ if menu == "📦 スピード仕入・解体":
     with col_right:
         st.subheader("② カートの中身と原価計算")
         with st.container(border=True):
-            # 🆕 修正：リセット用カウンターをキーに組み込み、完全に新しい入力欄として生成させる
             rk = st.session_state['reset_key']
             total_paid = st.number_input("支払った総額 (送料・手数料込み)", min_value=0, step=1000, key=f"total_paid_{rk}")
             purchase_title = st.text_input("仕入名目 (任意)", placeholder="例: 秋葉原福袋", key=f"purchase_title_{rk}")
@@ -545,7 +543,12 @@ if menu == "📦 スピード仕入・解体":
                     if original_item['type'] != "サプライ":
                         is_merged = False
                         if item_type in ["未開封BOX", "素材・バルク"] and not df_inv.empty:
-                            match_idx = df_inv[(df_inv['商品名'] == item_name) & (df_inv['種類'] == item_type) & (df_inv['収録パック'] == item_pack)].index
+                            # 🆕 修正：文字のスペース等の揺れを無視して完璧に同一商品を探し出す
+                            mask_name = df_inv['商品名'].astype(str).str.strip() == str(item_name).strip()
+                            mask_type = df_inv['種類'].astype(str).str.strip() == str(item_type).strip()
+                            mask_pack = df_inv['収録パック'].astype(str).str.strip() == str(item_pack).strip()
+                            
+                            match_idx = df_inv[mask_name & mask_type & mask_pack].index
                             if len(match_idx) > 0:
                                 target_idx = match_idx[0]
                                 current_qty = int(df_inv.at[target_idx, '在庫数'])
@@ -577,7 +580,6 @@ if menu == "📦 スピード仕入・解体":
                 record_title = purchase_title if purchase_title else "一括仕入"
                 record_purchase_items(batch_id, purchase_date, record_title, purchase_source, "カート一括登録", purchase_items_for_log)
                 
-                # 🆕 修正：危険なdelを廃止し、カウンターを＋1してフォームを安全にまっさらにする
                 st.session_state['cart'] = []
                 st.session_state['has_searched'] = False
                 st.session_state['reset_key'] += 1
@@ -605,7 +607,6 @@ elif menu == "📊 在庫・PSA管理":
             st.subheader("🃏 シングルカード在庫 (PSA以外)")
             df_single = df_active[(df_active['種類'] == 'シングルカード') & (~df_active['ステータス'].isin(['PSA提出中', '鑑定済み']))]
             if not df_single.empty:
-                # 🆕 修正：表示される列に「参考相場」をしっかりと追加
                 st.dataframe(df_single[['商品名', '収録パック', '状態_PSA', '原価', '参考相場', '在庫数', '仕入日', 'ステータス']], use_container_width=True, hide_index=True)
                 st.divider()
                 single_options = {f"[{row['収録パック']}] {row['商品名']} (ID: {row['ID']})": row['ID'] for idx, row in df_single.iterrows()}
@@ -1007,18 +1008,20 @@ elif menu == "📖 帳簿・分析":
             if target_undo and st.button("🚨 この取引を取り消す", type="primary"):
                 sale_id = undo_opts[target_undo]
                 sale_row = df_sales[df_sales['ID'] == sale_id].iloc[0]
-                restored_qty = sale_row['売却数']
+                restored_qty = int(sale_row['売却数'])
                 
                 original_item_id = sale_row.get('元の在庫ID', '')
                 
                 if original_item_id:
                     match_inv = df_inv[df_inv['ID'] == original_item_id]
                 else:
-                    match_inv = df_inv[df_inv['商品名'] == sale_row['商品名']]
+                    # 🆕 修正：売却取消時も確実に見つけ出すように強化
+                    mask_name = df_inv['商品名'].astype(str).str.strip() == str(sale_row['商品名']).strip()
+                    match_inv = df_inv[mask_name]
                 
                 if not match_inv.empty:
                     target_inv_id = match_inv.iloc[0]['ID']
-                    current_qty = match_inv.iloc[0]['在庫数']
+                    current_qty = int(match_inv.iloc[0]['在庫数'])
                     df_inv.loc[df_inv['ID'] == target_inv_id, '在庫数'] = current_qty + restored_qty
                     df_inv.loc[df_inv['ID'] == target_inv_id, 'ステータス'] = '在庫あり'
                     save_data(df_inv)
@@ -1051,18 +1054,29 @@ elif menu == "📖 帳簿・分析":
             if target_pur_undo and st.button("🚨 この仕入を取り消す", type="primary"):
                 pur_id = pur_undo_opts[target_pur_undo]
                 pur_row = df_pur[df_pur['ID'] == pur_id].iloc[0]
-                cancel_qty = pur_row['数量']
-                target_name = pur_row['商品名']
-                target_pack = pur_row.get('収録パック', '')
+                cancel_qty = int(pur_row['数量'])
+                target_name = str(pur_row['商品名']).strip()
+                target_pack = str(pur_row.get('収録パック', '')).strip()
                 
-                match_inv = df_inv[(df_inv['商品名'] == target_name) & (df_inv['収録パック'] == target_pack)]
+                # 🆕 修正：文字のスペースを無視して100%正確に同一商品を見つけ出す
+                mask_name = df_inv['商品名'].astype(str).str.strip() == target_name
+                mask_pack = df_inv['収録パック'].astype(str).str.strip() == target_pack
+                match_inv = df_inv[mask_name & mask_pack]
+                
                 if not match_inv.empty:
                     target_inv_id = match_inv.iloc[0]['ID']
-                    current_qty = match_inv.iloc[0]['在庫数']
+                    current_qty = int(match_inv.iloc[0]['在庫数'])
                     new_qty = current_qty - cancel_qty
-                    if new_qty < 0: new_qty = 0
-                    df_inv.loc[df_inv['ID'] == target_inv_id, '在庫数'] = new_qty
+                    
+                    if new_qty <= 0:
+                        # 🆕 修正：在庫が0になったら、行の残骸を残さずに完全にデータベースから消去する
+                        df_inv = df_inv[df_inv['ID'] != target_inv_id]
+                    else:
+                        df_inv.loc[df_inv['ID'] == target_inv_id, '在庫数'] = new_qty
+                        
                     save_data(df_inv)
+                else:
+                    st.warning("対象の在庫データが見つかりませんでしたが、仕入記録の削除を続行します。")
                 
                 df_pur_new = df_pur[df_pur['ID'] != pur_id]
                 save_purchase_data(df_pur_new)
@@ -1070,7 +1084,7 @@ elif menu == "📖 帳簿・分析":
                 df_recalc = recalculate_moving_average_costs()
                 save_data(df_recalc)
 
-                st.success("仕入を取り消し、原価の自動修復を完了しました！")
+                st.success("仕入を取り消し、在庫の修正と原価の自動修復を完了しました！")
                 time.sleep(2)
                 st.rerun()
         else:
