@@ -281,7 +281,6 @@ def search_card_rush(keyword):
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
 st.title("🎴 ぽっけぇ～道 管理システム v3.0")
 
-# 🆕 改修：システムが忘れないように、入力内容をSession Stateで強固に記憶させる
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
 if 'total_paid' not in st.session_state: st.session_state['total_paid'] = 0
@@ -404,7 +403,6 @@ if menu == "📦 スピード仕入・解体":
     with col_right:
         st.subheader("② カートの中身と原価計算")
         with st.container(border=True):
-            # 🆕 改修：keyを追加し、金額や仕入先を強固に記憶させる
             total_paid = st.number_input("支払った総額 (送料・手数料込み)", min_value=0, step=1000, key="total_paid")
             purchase_title = st.text_input("仕入名目 (任意)", placeholder="例: 秋葉原福袋", key="purchase_title")
             purchase_source = st.selectbox("仕入先", ["店舗", "フリマ(メルカリ等)", "オンラインオリパ", "問屋", "自己所有・過去の在庫", "その他"], key="purchase_source")
@@ -430,7 +428,6 @@ if menu == "📦 スピード仕入・解体":
             calc_df = pd.DataFrame(calculated_cart)
             st.write(f"💡 カート内の相場合計: **¥{total_market_value:,}**")
             
-            # 🆕 改修：原価や名前が勝手にキャッシュ（記憶）されないように、disabled=Trueで完全ロックをかける
             edited_cart = st.data_editor(
                 calc_df, hide_index=True,
                 column_config={
@@ -523,15 +520,15 @@ if menu == "📦 スピード仕入・解体":
                     df_inv = pd.concat([df_inv, new_inv_df], ignore_index=True) if not df_inv.empty else new_inv_df
                 
                 save_data(df_inv)
-                record_title = st.session_state['purchase_title'] if st.session_state['purchase_title'] else "一括仕入"
-                record_purchase_items(batch_id, purchase_date, record_title, st.session_state['purchase_source'], "カート一括登録", purchase_items_for_log)
+                record_title = st.session_state.get('purchase_title', '') if st.session_state.get('purchase_title', '') else "一括仕入"
+                record_purchase_items(batch_id, purchase_date, record_title, st.session_state.get('purchase_source', '店舗'), "カート一括登録", purchase_items_for_log)
                 
-                # 登録後に記憶をリセットして次の作業に備える
+                # 🆕 改修：Streamlitの安全ルールに則り、delを使って入力欄の記憶を綺麗に消去する
                 st.session_state['cart'] = []
                 st.session_state['has_searched'] = False
-                st.session_state['total_paid'] = 0
-                st.session_state['purchase_title'] = ""
-                st.session_state['purchase_source'] = "店舗"
+                for key in ['total_paid', 'purchase_title', 'purchase_source']:
+                    if key in st.session_state:
+                        del st.session_state[key]
 
                 st.success("🎉 在庫DBおよび仕入帳（明細）に登録しました！")
                 time.sleep(1.5); st.rerun()
