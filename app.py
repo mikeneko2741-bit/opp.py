@@ -13,7 +13,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.1)
+# ⚙️ 設定・定数 (v4.2)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -329,10 +329,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.1)
+# 🖥️ アプリ画面 (v4.2)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.1")
+st.title("🎴 ぽっけぇ～道 管理システム v4.2")
 
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
@@ -543,7 +543,6 @@ if menu == "📦 スピード仕入・解体":
                     if original_item['type'] != "サプライ":
                         is_merged = False
                         if item_type in ["未開封BOX", "素材・バルク"] and not df_inv.empty:
-                            # 🆕 修正：文字のスペース等の揺れを無視して完璧に同一商品を探し出す
                             mask_name = df_inv['商品名'].astype(str).str.strip() == str(item_name).strip()
                             mask_type = df_inv['種類'].astype(str).str.strip() == str(item_type).strip()
                             mask_pack = df_inv['収録パック'].astype(str).str.strip() == str(item_pack).strip()
@@ -784,8 +783,103 @@ elif menu == "📊 在庫・PSA管理":
                 
         with tab_maintenance:
             st.subheader("🛠️ データベースのメンテナンス機能")
-            st.write("手動での入力ミスや相場の変動に、ボタン一つで対応します。")
             
+            # --- 🆕 在庫おまとめ機能 (v4.2) ---
+            with st.container(border=True):
+                st.markdown("#### 🔗 在庫おまとめ（商品統合）")
+                st.caption("「ホワイトフレア」のように、スペースの違い等で別々の行になってしまった商品を1つに合体させます。過去の帳簿の名前もすべて自動で統一します。")
+                
+                df_to_merge = df_active.copy()
+                df_to_merge['統合対象'] = False
+                
+                # 絞り込み検索
+                merge_search = st.text_input("🔍 統合したい商品を検索", placeholder="例: ホワイトフレア")
+                if merge_search:
+                    df_to_merge = df_to_merge[df_to_merge['商品名'].str.contains(merge_search, case=False, na=False)]
+                
+                merge_editor = st.data_editor(
+                    df_to_merge[['統合対象', '収録パック', '商品名', '種類', '状態_PSA', '在庫数', '原価', 'ID']],
+                    hide_index=True,
+                    column_config={
+                        "統合対象": st.column_config.CheckboxColumn("選択", default=False, width="small"),
+                        "ID": None
+                    },
+                    use_container_width=True,
+                    key="merge_editor"
+                )
+                
+                selected_for_merge = merge_editor[merge_editor['統合対象'] == True]
+                
+                if not selected_for_merge.empty:
+                    if len(selected_for_merge) < 2:
+                        st.info("統合するには2つ以上の商品を選択してください。")
+                    else:
+                        # 安全装置：種類と状態が違うものは警告
+                        types = selected_for_merge['種類'].unique()
+                        conds = selected_for_merge['状態_PSA'].unique()
+                        
+                        if len(types) > 1 or len(conds) > 1:
+                            st.error("⚠️ 種類（BOXとシングル等）や状態が異なる商品は統合できません。")
+                        else:
+                            # 統合後の計算
+                            total_qty = selected_for_merge['在庫数'].sum()
+                            total_cost_value = (selected_for_merge['原価'] * selected_for_merge['在庫数']).sum()
+                            new_avg_cost = int(total_cost_value / total_qty) if total_qty > 0 else 0
+                            
+                            # マスターとなる商品情報の決定（最初の行を採用）
+                            master_row = selected_for_merge.iloc[0]
+                            master_name = master_row['商品名']
+                            master_pack = master_row['収録パック']
+                            master_id = master_row['ID']
+                            
+                            st.success(f"✅ 統合準備完了：以下の内容で1つにまとめます")
+                            st.write(f"・名称: **{master_name}** / パック: **{master_pack}**")
+                            st.write(f"・在庫数合計: **{total_qty}** / 新しい平均原価: **¥{new_avg_cost:,}**")
+                            
+                            if st.button("🚨 この内容で商品を統合し、過去の帳簿も書き換える", type="primary", use_container_width=True):
+                                with st.spinner("データベースを統合中..."):
+                                    # 1. 在庫DBの更新
+                                    ids_to_remove = selected_for_merge['ID'].tolist()
+                                    # マスター以外を削除
+                                    df = df[~df['ID'].isin(ids_to_remove)]
+                                    # マスター行を新規作成（または更新して追加）
+                                    new_row = master_row.copy()
+                                    new_row['在庫数'] = total_qty
+                                    new_row['原価'] = new_avg_cost
+                                    new_row['商品名'] = master_name
+                                    new_row['収録パック'] = master_pack
+                                    new_row.drop('統合対象', inplace=True)
+                                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                                    save_data(df)
+                                    
+                                    # 2. 仕入帳の書き換え（名前とパックをマスターに統一）
+                                    df_pur_m = load_purchase_data()
+                                    target_names = selected_for_merge['商品名'].tolist()
+                                    target_packs = selected_for_merge['収録パック'].tolist()
+                                    
+                                    for t_name, t_pack in zip(target_names, target_packs):
+                                        mask = (df_pur_m['商品名'] == t_name) & (df_pur_m['収録パック'] == t_pack)
+                                        df_pur_m.loc[mask, '商品名'] = master_name
+                                        df_pur_m.loc[mask, '収録パック'] = master_pack
+                                    save_purchase_data(df_pur_m)
+                                    
+                                    # 3. 売上帳の書き換え
+                                    df_sales_m = load_sales_data()
+                                    for t_name, t_pack in zip(target_names, target_packs):
+                                        mask = (df_sales_m['商品名'] == t_name) & (df_sales_m['収録パック'] == t_pack)
+                                        df_sales_m.loc[mask, '商品名'] = master_name
+                                        df_sales_m.loc[mask, '収録パック'] = master_pack
+                                        # IDもマスターに紐付け直す
+                                        df_sales_m.loc[df_sales_m['元の在庫ID'].isin(ids_to_remove), '元の在庫ID'] = master_id
+                                    save_sales_data(df_sales_m)
+                                    
+                                    # 4. 仕上げに原価の再計算
+                                    df_final = recalculate_moving_average_costs()
+                                    save_data(df_final)
+                                    
+                                    st.success("✨ 商品の統合と帳簿の書き換えが完了しました！「神の計算機」との同期もバッチリです。")
+                                    time.sleep(2); st.rerun()
+
             cc1, cc2 = st.columns(2)
             with cc1:
                 with st.container(border=True):
@@ -1015,7 +1109,6 @@ elif menu == "📖 帳簿・分析":
                 if original_item_id:
                     match_inv = df_inv[df_inv['ID'] == original_item_id]
                 else:
-                    # 🆕 修正：売却取消時も確実に見つけ出すように強化
                     mask_name = df_inv['商品名'].astype(str).str.strip() == str(sale_row['商品名']).strip()
                     match_inv = df_inv[mask_name]
                 
@@ -1058,7 +1151,6 @@ elif menu == "📖 帳簿・分析":
                 target_name = str(pur_row['商品名']).strip()
                 target_pack = str(pur_row.get('収録パック', '')).strip()
                 
-                # 🆕 修正：文字のスペースを無視して100%正確に同一商品を見つけ出す
                 mask_name = df_inv['商品名'].astype(str).str.strip() == target_name
                 mask_pack = df_inv['収録パック'].astype(str).str.strip() == target_pack
                 match_inv = df_inv[mask_name & mask_pack]
@@ -1069,7 +1161,6 @@ elif menu == "📖 帳簿・分析":
                     new_qty = current_qty - cancel_qty
                     
                     if new_qty <= 0:
-                        # 🆕 修正：在庫が0になったら、行の残骸を残さずに完全にデータベースから消去する
                         df_inv = df_inv[df_inv['ID'] != target_inv_id]
                     else:
                         df_inv.loc[df_inv['ID'] == target_inv_id, '在庫数'] = new_qty
@@ -1118,7 +1209,7 @@ elif menu == "📖 帳簿・分析":
                         csv_sales = filtered_sales.to_csv(index=False).encode('utf-8-sig')
                         st.download_button(label="📥 指定期間の【売上帳】をダウンロード", data=csv_sales, file_name=f"売上帳_{start_str}_to_{end_str}.csv", mime='text/csv', key='dl_sales', use_container_width=True)
                     else:
-                        st.button("📥 指定期間の【売上帳】をダウンロード", disabled=True, help="この期間のデータはありません", key='dl_sales_dis', use_container_width=True)
+                        st.button("📥 指定期間の【売上帳】をダウンロード", disabled=True, help="この期間의データはありません", key='dl_sales_dis', use_container_width=True)
                 else:
                     st.caption("売上データがありません")
 
