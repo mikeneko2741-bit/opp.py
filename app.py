@@ -185,7 +185,6 @@ def record_purchase_items(batch_id, date, title, source, note, items):
 # ---------------------------------------------------------
 def clean_product_name(text):
     if not isinstance(text, str): return str(text)
-    # キズ表記（〔状態B〕など）は残し、管理用の末尾ID（{-}xxxなど）だけを消す
     text = re.sub(r'\{-}.*$', '', text)
     return text.strip()
 
@@ -219,7 +218,6 @@ def fetch_from_url(url):
                 nums = re.findall(r'\d+', price_tag.get_text(strip=True).replace(',', ''))
                 if nums: price = int(nums[0])
             
-            # 画像取得（スナイパー方式：ダミー画像を完全回避）
             img_url = ""
             img_tags = item.select('img')
             for img in img_tags:
@@ -239,7 +237,6 @@ def fetch_from_url(url):
             if img_url.startswith('/'): 
                 img_url = "https://www.cardrush-pokemon.jp" + img_url
 
-            # 商品ページURL取得
             product_url = ""
             a_tag = item.select_one('a[href]')
             if a_tag:
@@ -256,7 +253,6 @@ def fetch_from_url(url):
                     "url": product_url
                 })
         
-        # 重複排除（URLを優先して別商品として扱う）
         unique_results = []
         seen_urls = set()
         for r in results:
@@ -285,8 +281,12 @@ def search_card_rush(keyword):
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
 st.title("🎴 ぽっけぇ～道 管理システム v3.0")
 
+# 🆕 改修：システムが忘れないように、入力内容をSession Stateで強固に記憶させる
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
+if 'total_paid' not in st.session_state: st.session_state['total_paid'] = 0
+if 'purchase_title' not in st.session_state: st.session_state['purchase_title'] = ""
+if 'purchase_source' not in st.session_state: st.session_state['purchase_source'] = "店舗"
 
 menu = st.sidebar.radio(
     "【作業メニュー】", 
@@ -332,7 +332,6 @@ if menu == "📦 スピード仕入・解体":
                             else: st.write("🖼️ 画像なし")
                         with c2:
                             disp_pack = f" [{item['pack']}]" if item['pack'] else ""
-                            # Markdown崩れを防ぐHTML直接出力
                             safe_name = item['name'].replace('<', '&lt;').replace('>', '&gt;')
                             if item.get('url'):
                                 st.markdown(f'<a href="{item["url"]}" target="_blank" style="font-weight: bold; color: #1f77b4; text-decoration: none;">{safe_name}{disp_pack}</a>', unsafe_allow_html=True)
@@ -405,9 +404,10 @@ if menu == "📦 スピード仕入・解体":
     with col_right:
         st.subheader("② カートの中身と原価計算")
         with st.container(border=True):
-            total_paid = st.number_input("支払った総額 (送料・手数料込み)", min_value=0, value=0, step=1000)
-            purchase_title = st.text_input("仕入名目 (任意)", placeholder="例: 秋葉原福袋")
-            purchase_source = st.selectbox("仕入先", ["店舗", "フリマ(メルカリ等)", "オンラインオリパ", "問屋", "自己所有・過去の在庫", "その他"])
+            # 🆕 改修：keyを追加し、金額や仕入先を強固に記憶させる
+            total_paid = st.number_input("支払った総額 (送料・手数料込み)", min_value=0, step=1000, key="total_paid")
+            purchase_title = st.text_input("仕入名目 (任意)", placeholder="例: 秋葉原福袋", key="purchase_title")
+            purchase_source = st.selectbox("仕入先", ["店舗", "フリマ(メルカリ等)", "オンラインオリパ", "問屋", "自己所有・過去の在庫", "その他"], key="purchase_source")
             
         if not st.session_state['cart']:
             st.caption("カートは空です。")
@@ -418,7 +418,7 @@ if menu == "📦 スピード仕入・解体":
                 item_total_market = item['qty'] * item['market_price']
                 if total_market_value > 0:
                     ratio = item_total_market / total_market_value
-                    unit_cost = int((total_paid * ratio) / item['qty'])
+                    unit_cost = int((st.session_state['total_paid'] * ratio) / item['qty'])
                 else:
                     unit_cost = 0
                 calculated_cart.append({
@@ -430,13 +430,18 @@ if menu == "📦 スピード仕入・解体":
             calc_df = pd.DataFrame(calculated_cart)
             st.write(f"💡 カート内の相場合計: **¥{total_market_value:,}**")
             
+            # 🆕 改修：原価や名前が勝手にキャッシュ（記憶）されないように、disabled=Trueで完全ロックをかける
             edited_cart = st.data_editor(
                 calc_df, hide_index=True,
                 column_config={
                     "削除": st.column_config.CheckboxColumn("削除", default=False), 
                     "ID": None,
                     "数量": st.column_config.NumberColumn("数量", min_value=1, step=1),
-                    "収録パック": st.column_config.TextColumn("収録パック")
+                    "収録パック": st.column_config.TextColumn("収録パック"),
+                    "商品名": st.column_config.TextColumn("商品名", disabled=True),
+                    "種類": st.column_config.TextColumn("種類", disabled=True),
+                    "自動計算原価": st.column_config.NumberColumn("自動計算原価", disabled=True, format="¥%d"),
+                    "参考相場": st.column_config.NumberColumn("参考相場", disabled=True, format="¥%d")
                 },
                 use_container_width=True
             )
@@ -509,7 +514,7 @@ if menu == "📦 スピード仕入・解体":
                                 'ID': item_id, '商品名': item_name, '収録パック': item_pack, '種類': item_type,
                                 '状態_PSA': original_item['cond'], '仕入日': purchase_date,
                                 '原価': new_cost, '参考相場': row['参考相場'],
-                                '在庫数': new_qty, '仕入元': purchase_source,
+                                '在庫数': new_qty, '仕入元': st.session_state['purchase_source'],
                                 'ステータス': '在庫あり', 'PSA番号': ''
                             })
                 
@@ -518,11 +523,16 @@ if menu == "📦 スピード仕入・解体":
                     df_inv = pd.concat([df_inv, new_inv_df], ignore_index=True) if not df_inv.empty else new_inv_df
                 
                 save_data(df_inv)
-                record_title = purchase_title if purchase_title else "一括仕入"
-                record_purchase_items(batch_id, purchase_date, record_title, purchase_source, "カート一括登録", purchase_items_for_log)
+                record_title = st.session_state['purchase_title'] if st.session_state['purchase_title'] else "一括仕入"
+                record_purchase_items(batch_id, purchase_date, record_title, st.session_state['purchase_source'], "カート一括登録", purchase_items_for_log)
                 
+                # 登録後に記憶をリセットして次の作業に備える
                 st.session_state['cart'] = []
                 st.session_state['has_searched'] = False
+                st.session_state['total_paid'] = 0
+                st.session_state['purchase_title'] = ""
+                st.session_state['purchase_source'] = "店舗"
+
                 st.success("🎉 在庫DBおよび仕入帳（明細）に登録しました！")
                 time.sleep(1.5); st.rerun()
 
