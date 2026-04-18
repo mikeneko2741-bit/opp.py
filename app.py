@@ -13,7 +13,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.2)
+# ⚙️ 設定・定数 (v4.2.1)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -329,10 +329,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.2)
+# 🖥️ アプリ画面 (v4.2.1)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.2")
+st.title("🎴 ぽっけぇ～道 管理システム v4.2.1")
 
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
@@ -757,12 +757,13 @@ elif menu == "📊 在庫・PSA管理":
             df_edit['削除'] = False
             
             edited_df = st.data_editor(
-                df_edit[['削除', '商品名', '収録パック', '種類', '在庫数', '原価', 'ステータス', '相場更新', 'ID']],
+                df_edit[['削除', '商品名', '収録パック', '種類', '在庫数', '原価', 'ステータス', '相場更新', 'ID', '参考相場']],
                 hide_index=True,
                 column_config={
                     "削除": st.column_config.CheckboxColumn("削除", default=False, width="small"), 
                     "ID": None,
-                    "相場更新": st.column_config.CheckboxColumn("相場自動更新", default=True, help="ONにするとメンテナンス機能で最新相場を取得します")
+                    "相場更新": st.column_config.CheckboxColumn("相場自動更新", default=True, help="ONにするとメンテナンス機能で最新相場を取得します"),
+                    "参考相場": st.column_config.NumberColumn("参考相場", min_value=0, step=100)
                 },
                 use_container_width=True
             )
@@ -778,13 +779,14 @@ elif menu == "📊 在庫・PSA管理":
                         df_saved.loc[df_saved['ID'] == row['ID'], '原価'] = row['原価']
                         df_saved.loc[df_saved['ID'] == row['ID'], 'ステータス'] = row['ステータス']
                         df_saved.loc[df_saved['ID'] == row['ID'], '相場更新'] = row['相場更新']
+                        df_saved.loc[df_saved['ID'] == row['ID'], '参考相場'] = row['参考相場']
                 save_data(df_saved)
                 st.success("✅ データベースを更新しました！"); time.sleep(1.5); st.rerun()
                 
         with tab_maintenance:
             st.subheader("🛠️ データベースのメンテナンス機能")
             
-            # --- 🆕 在庫おまとめ機能 (v4.2) ---
+            # --- 🆕 在庫おまとめ機能 (v4.2.1 修正版) ---
             with st.container(border=True):
                 st.markdown("#### 🔗 在庫おまとめ（商品統合）")
                 st.caption("「ホワイトフレア」のように、スペースの違い等で別々の行になってしまった商品を1つに合体させます。過去の帳簿の名前もすべて自動で統一します。")
@@ -826,11 +828,12 @@ elif menu == "📊 在庫・PSA管理":
                             total_cost_value = (selected_for_merge['原価'] * selected_for_merge['在庫数']).sum()
                             new_avg_cost = int(total_cost_value / total_qty) if total_qty > 0 else 0
                             
-                            # マスターとなる商品情報の決定（最初の行を採用）
-                            master_row = selected_for_merge.iloc[0]
+                            # 【修正箇所】マスターとなる商品情報の決定（裏側の隠しデータも全て取得）
+                            master_id = selected_for_merge.iloc[0]['ID']
+                            master_row = df_active[df_active['ID'] == master_id].iloc[0].copy()
+                            
                             master_name = master_row['商品名']
                             master_pack = master_row['収録パック']
-                            master_id = master_row['ID']
                             
                             st.success(f"✅ 統合準備完了：以下の内容で1つにまとめます")
                             st.write(f"・名称: **{master_name}** / パック: **{master_pack}**")
@@ -842,13 +845,12 @@ elif menu == "📊 在庫・PSA管理":
                                     ids_to_remove = selected_for_merge['ID'].tolist()
                                     # マスター以外を削除
                                     df = df[~df['ID'].isin(ids_to_remove)]
-                                    # マスター行を新規作成（または更新して追加）
+                                    
+                                    # マスター行を新規作成（全ての列情報を保持）
                                     new_row = master_row.copy()
                                     new_row['在庫数'] = total_qty
                                     new_row['原価'] = new_avg_cost
-                                    new_row['商品名'] = master_name
-                                    new_row['収録パック'] = master_pack
-                                    new_row.drop('統合対象', inplace=True)
+                                    
                                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                                     save_data(df)
                                     
