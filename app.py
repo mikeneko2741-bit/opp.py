@@ -16,7 +16,6 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 # ⚙️ 設定・定数 (v3.0)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
-# ※裏側のファイル名は接続維持のため変更していません
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
 
 SHEET_INVENTORY = '在庫DB'
@@ -186,6 +185,7 @@ def record_purchase_items(batch_id, date, title, source, note, items):
 # ---------------------------------------------------------
 def clean_product_name(text):
     if not isinstance(text, str): return str(text)
+    # キズ表記（〔状態B〕など）は残し、管理用の末尾ID（{-}xxxなど）だけを消す
     text = re.sub(r'\{-}.*$', '', text)
     return text.strip()
 
@@ -219,6 +219,7 @@ def fetch_from_url(url):
                 nums = re.findall(r'\d+', price_tag.get_text(strip=True).replace(',', ''))
                 if nums: price = int(nums[0])
             
+            # 画像取得（スナイパー方式：ダミー画像を完全回避）
             img_url = ""
             img_tags = item.select('img')
             for img in img_tags:
@@ -238,6 +239,7 @@ def fetch_from_url(url):
             if img_url.startswith('/'): 
                 img_url = "https://www.cardrush-pokemon.jp" + img_url
 
+            # 商品ページURL取得
             product_url = ""
             a_tag = item.select_one('a[href]')
             if a_tag:
@@ -254,6 +256,7 @@ def fetch_from_url(url):
                     "url": product_url
                 })
         
+        # 重複排除（URLを優先して別商品として扱う）
         unique_results = []
         seen_urls = set()
         for r in results:
@@ -279,7 +282,6 @@ def search_card_rush(keyword):
 # ---------------------------------------------------------
 # 🖥️ アプリ画面 (v3.0)
 # ---------------------------------------------------------
-# 🆕 UI表記を「ぽっけぇ～道」に統一
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
 st.title("🎴 ぽっけぇ～道 管理システム v3.0")
 
@@ -330,6 +332,7 @@ if menu == "📦 スピード仕入・解体":
                             else: st.write("🖼️ 画像なし")
                         with c2:
                             disp_pack = f" [{item['pack']}]" if item['pack'] else ""
+                            # Markdown崩れを防ぐHTML直接出力
                             safe_name = item['name'].replace('<', '&lt;').replace('>', '&gt;')
                             if item.get('url'):
                                 st.markdown(f'<a href="{item["url"]}" target="_blank" style="font-weight: bold; color: #1f77b4; text-decoration: none;">{safe_name}{disp_pack}</a>', unsafe_allow_html=True)
@@ -338,9 +341,10 @@ if menu == "📦 スピード仕入・解体":
                             st.caption(f"相場: ¥{item['price']:,}")
                         with c3:
                             with st.popover("カートに追加"):
-                                add_qty = st.number_input("枚数/個数", min_value=1, value=1, key=f"qty_{item['url']}_{item['name']}")
-                                add_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"cond_{item['url']}_{item['name']}")
-                                if st.button("追加する", key=f"add_{item['url']}_{item['name']}", use_container_width=True):
+                                unique_key = f"{item.get('url', str(uuid.uuid4()))}_{item['name']}"
+                                add_qty = st.number_input("枚数/個数", min_value=1, value=1, key=f"qty_{unique_key}")
+                                add_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"cond_{unique_key}")
+                                if st.button("追加する", key=f"add_{unique_key}", use_container_width=True):
                                     st.session_state['cart'].append({
                                         "id": str(uuid.uuid4())[:8], 
                                         "name": item['name'],
