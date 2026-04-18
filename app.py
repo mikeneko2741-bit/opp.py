@@ -13,7 +13,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.2.1)
+# ⚙️ 設定・定数 (v4.3)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -240,12 +240,65 @@ def recalculate_moving_average_costs():
     return df_inv
 
 # ---------------------------------------------------------
-# 🌐 スクレイピング＆文字列クリーニング
+# 🌐 スクレイピング＆文字列クリーニング (v4.3 トリプルチェック搭載)
 # ---------------------------------------------------------
 def clean_product_name(text):
     if not isinstance(text, str): return str(text)
     text = re.sub(r'\{-}.*$', '', text)
     return text.strip()
+
+# ✨ v4.3 翻訳係: 検索用のシンプルなキーワードを作り出す
+def generate_search_keyword(orig_name):
+    is_box = "BOX" in orig_name.upper() or "ｂｏｘ" in orig_name.lower()
+    
+    match = re.search(r'『(.+?)』', orig_name)
+    if match:
+        base = match.group(1)
+    else:
+        base = orig_name
+        
+    # カッコやパック名などの装飾を剥がす
+    cleaned = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', base).strip()
+    cleaned = cleaned.replace("拡張パック", "").replace("強化", "").replace("ハイクラスパック", "").replace("構築済みデッキ", "").strip()
+    
+    if is_box and "BOX" not in cleaned.upper():
+        cleaned += " BOX"
+        
+    if not cleaned: cleaned = orig_name
+    return cleaned.strip()
+
+# ✨ v4.3 警備員＆検品係: 検索結果から本物の美品だけを見つけ出す
+def get_best_match(orig_name, orig_pack, results):
+    # キズモノ判定リスト
+    ng_words = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済"]
+    # 別の商品（セット品）判定リスト
+    special_words = ["デラックス", "スペシャル", "プレミアム", "セット", "ジャンボ", "コレクション", "クラシック"]
+    
+    for res in results:
+        res_name = res['name']
+        res_pack = res['pack']
+        
+        # 1. 検品係 (キズモノはスキップ)
+        if any(ng in res_name for ng in ng_words):
+            continue
+            
+        # 2. 指紋認証 (パックコードがDBにある場合、完全に一致するか)
+        if orig_pack and res_pack:
+            if orig_pack.upper() != res_pack.upper():
+                continue
+        
+        # 3. 警備員 (元の名前にデラックス等が無いのに、結果に入っている場合は別物とみなす)
+        is_safe = True
+        for sw in special_words:
+            if sw not in orig_name and sw in res_name:
+                is_safe = False
+                break
+        if not is_safe:
+            continue
+            
+        return res # すべての関門を突破した最初の（＝一番一致度の高い）ものを返す
+        
+    return None
 
 def fetch_from_url(url):
     results = []
@@ -329,10 +382,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.2.1)
+# 🖥️ アプリ画面 (v4.3)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.2.1")
+st.title("🎴 ぽっけぇ～道 管理システム v4.3")
 
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
@@ -786,7 +839,6 @@ elif menu == "📊 在庫・PSA管理":
         with tab_maintenance:
             st.subheader("🛠️ データベースのメンテナンス機能")
             
-            # --- 🆕 在庫おまとめ機能 (v4.2.1 修正版) ---
             with st.container(border=True):
                 st.markdown("#### 🔗 在庫おまとめ（商品統合）")
                 st.caption("「ホワイトフレア」のように、スペースの違い等で別々の行になってしまった商品を1つに合体させます。過去の帳簿の名前もすべて自動で統一します。")
@@ -794,7 +846,6 @@ elif menu == "📊 在庫・PSA管理":
                 df_to_merge = df_active.copy()
                 df_to_merge['統合対象'] = False
                 
-                # 絞り込み検索
                 merge_search = st.text_input("🔍 統合したい商品を検索", placeholder="例: ホワイトフレア")
                 if merge_search:
                     df_to_merge = df_to_merge[df_to_merge['商品名'].str.contains(merge_search, case=False, na=False)]
@@ -816,19 +867,16 @@ elif menu == "📊 在庫・PSA管理":
                     if len(selected_for_merge) < 2:
                         st.info("統合するには2つ以上の商品を選択してください。")
                     else:
-                        # 安全装置：種類と状態が違うものは警告
                         types = selected_for_merge['種類'].unique()
                         conds = selected_for_merge['状態_PSA'].unique()
                         
                         if len(types) > 1 or len(conds) > 1:
                             st.error("⚠️ 種類（BOXとシングル等）や状態が異なる商品は統合できません。")
                         else:
-                            # 統合後の計算
                             total_qty = selected_for_merge['在庫数'].sum()
                             total_cost_value = (selected_for_merge['原価'] * selected_for_merge['在庫数']).sum()
                             new_avg_cost = int(total_cost_value / total_qty) if total_qty > 0 else 0
                             
-                            # 【修正箇所】マスターとなる商品情報の決定（裏側の隠しデータも全て取得）
                             master_id = selected_for_merge.iloc[0]['ID']
                             master_row = df_active[df_active['ID'] == master_id].iloc[0].copy()
                             
@@ -841,12 +889,9 @@ elif menu == "📊 在庫・PSA管理":
                             
                             if st.button("🚨 この内容で商品を統合し、過去の帳簿も書き換える", type="primary", use_container_width=True):
                                 with st.spinner("データベースを統合中..."):
-                                    # 1. 在庫DBの更新
                                     ids_to_remove = selected_for_merge['ID'].tolist()
-                                    # マスター以外を削除
                                     df = df[~df['ID'].isin(ids_to_remove)]
                                     
-                                    # マスター行を新規作成（全ての列情報を保持）
                                     new_row = master_row.copy()
                                     new_row['在庫数'] = total_qty
                                     new_row['原価'] = new_avg_cost
@@ -854,7 +899,6 @@ elif menu == "📊 在庫・PSA管理":
                                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                                     save_data(df)
                                     
-                                    # 2. 仕入帳の書き換え（名前とパックをマスターに統一）
                                     df_pur_m = load_purchase_data()
                                     target_names = selected_for_merge['商品名'].tolist()
                                     target_packs = selected_for_merge['収録パック'].tolist()
@@ -865,17 +909,14 @@ elif menu == "📊 在庫・PSA管理":
                                         df_pur_m.loc[mask, '収録パック'] = master_pack
                                     save_purchase_data(df_pur_m)
                                     
-                                    # 3. 売上帳の書き換え
                                     df_sales_m = load_sales_data()
                                     for t_name, t_pack in zip(target_names, target_packs):
                                         mask = (df_sales_m['商品名'] == t_name) & (df_sales_m['収録パック'] == t_pack)
                                         df_sales_m.loc[mask, '商品名'] = master_name
                                         df_sales_m.loc[mask, '収録パック'] = master_pack
-                                        # IDもマスターに紐付け直す
                                         df_sales_m.loc[df_sales_m['元の在庫ID'].isin(ids_to_remove), '元の在庫ID'] = master_id
                                     save_sales_data(df_sales_m)
                                     
-                                    # 4. 仕上げに原価の再計算
                                     df_final = recalculate_moving_average_costs()
                                     save_data(df_final)
                                     
@@ -897,7 +938,7 @@ elif menu == "📊 在庫・PSA管理":
             with cc2:
                 with st.container(border=True):
                     st.markdown("#### 🌐 最新相場の一括取得・更新")
-                    st.caption("カードラッシュの最新価格を取得し、在庫の参考相場を上書きします。（※『データ編集』タブで【相場自動更新】がOFFになっているマイナー品やキズあり品は安全のためスキップされます）")
+                    st.caption("カードラッシュの最新価格を取得し、在庫の参考相場を上書きします。（※『データ編集』タブで【相場自動更新】がOFFになっているマイナー品はスキップされます）")
                     if st.button("🔄 自動更新ONのカードの相場を最新にする", use_container_width=True):
                         df_inv_maint = load_data()
                         items_to_update = df_inv_maint[(df_inv_maint['相場更新'] == True) & (df_inv_maint['ステータス'] != '売却済み')]
@@ -911,26 +952,21 @@ elif menu == "📊 在庫・PSA管理":
                             total_items = len(unique_queries)
                             
                             for i, (_, row) in enumerate(unique_queries.iterrows()):
-                                name = row['商品名']
-                                pack = row['収録パック']
-                                progress_text.text(f"🔍 検索中: {name} [{pack}] ({i+1}/{total_items})")
+                                orig_name = row['商品名']
+                                orig_pack = row['収録パック']
+                                
+                                # --- ✨ v4.3 翻訳係 ---
+                                search_kw = generate_search_keyword(orig_name)
+                                progress_text.text(f"🔍 検索中: {search_kw} ({i+1}/{total_items})")
                                 
                                 time.sleep(1.0)
-                                results = search_card_rush(name)
+                                results = search_card_rush(search_kw)
                                 
-                                best_match = None
-                                for res in results:
-                                    if pack and res['pack'] == pack:
-                                        best_match = res
-                                        break
-                                    elif not pack and res['name'] == name:
-                                        best_match = res
-                                        break
+                                # --- ✨ v4.3 警備員＆検品係 ---
+                                best_match = get_best_match(orig_name, orig_pack, results)
                                 
-                                if not best_match and results: best_match = results[0]
-                                    
                                 if best_match:
-                                    mask = (df_inv_maint['商品名'] == name) & (df_inv_maint['収録パック'] == pack)
+                                    mask = (df_inv_maint['商品名'] == orig_name) & (df_inv_maint['収録パック'] == orig_pack)
                                     df_inv_maint.loc[mask, '参考相場'] = best_match['price']
                                 
                                 progress_bar.progress((i + 1) / total_items)
