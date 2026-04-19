@@ -12,9 +12,10 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
+from gspread.exceptions import CellNotFound, APIError
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.9)
+# ⚙️ 設定・定数 (v4.9.1)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -448,16 +449,8 @@ def load_cart_draft(session_id):
             return []
     return []
 
-# ✨ v4.8 神の計算機リファクタリング：時系列と優先順位の完全保証
+# ✨ 神の計算機リファクタリング：時系列と優先順位の完全保証
 def recalculate_moving_average_costs():
-    """
-    【神の計算機：移動平均原価の再計算】
-    - 登録日時をdatetime型に変換し、正確な時系列順を担保
-    - 同一秒に発生した処理は、必ず「仕入(0) → 売却(1)」の順序を強制し、在庫マイナスバグを防止
-    - 計算上マイナスになった場合は0に補正し警告を出力
-    - PSAやオリパのシステム記録もすべて含めて正確に計算
-    - 最終的に在庫DBの「原価」カラムのみを安全に更新
-    """
     df_inv = load_data()
     df_pur = load_purchase_data()
     df_sales = load_sales_data()
@@ -487,7 +480,6 @@ def recalculate_moving_average_costs():
             'qty': int(row['売却数'])
         })
         
-    # 時系列順にソート。同じ時間なら必ず「仕入(0)」が先になる
     events.sort(key=lambda x: (x['time'], x['type_priority']))
     
     for ev in events:
@@ -508,7 +500,6 @@ def recalculate_moving_average_costs():
                 st.warning(f"⚠️ 履歴計算エラー: [{ev['pack']}]{ev['name']} の計算上在庫がマイナスになりました。0に補正します。")
                 state['qty'] = 0
             
-    # 在庫DBの「原価」のみを更新
     for idx, row in df_inv.iterrows():
         key = (str(row['商品名']).strip(), str(row.get('収録パック', '')).strip(), str(row.get('状態_PSA', 'A (美品)')).strip())
         if key in history:
@@ -651,10 +642,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.9)
+# 🖥️ アプリ画面 (v4.9.1)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.9")
+st.title("🎴 ぽっけぇ～道 管理システム v4.9.1")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -799,7 +790,6 @@ if menu == "📦 スピード仕入・解体":
                     else:
                         st.warning("下書きデータがありませんでした。")
 
-        # ✨ 総額の変更を検知するためのステート管理
         if 'prev_total_paid' not in st.session_state:
             st.session_state['prev_total_paid'] = 0
 
@@ -809,7 +799,6 @@ if menu == "📦 スピード仕入・解体":
             purchase_title = st.text_input("仕入名目 (任意)", placeholder="例: 秋葉原福袋", key=f"purchase_title_{rk}")
             purchase_source = st.selectbox("仕入先", ["店舗", "フリマ(メルカリ等)", "オンラインオリパ", "問屋", "自己所有・過去の在庫", "その他"], key=f"purchase_source_{rk}")
             
-        # 総額が変更されたかチェック
         recalc_cost_flag = False
         if total_paid != st.session_state['prev_total_paid']:
             recalc_cost_flag = True
@@ -822,7 +811,6 @@ if menu == "📦 スピード仕入・解体":
             calculated_cart = []
             
             for item in st.session_state['cart']:
-                # ✨ 変更点: 総額が変わった時、またはまだ原価が計算されていない時だけ自動計算する
                 if recalc_cost_flag or 'unit_cost' not in item:
                     item_total_market = item['qty'] * item['market_price']
                     if total_market_value > 0:
@@ -841,7 +829,6 @@ if menu == "📦 スピード仕入・解体":
             calc_df = pd.DataFrame(calculated_cart)
             st.write(f"💡 カート内の相場合計: **¥{total_market_value:,}**")
             
-            # ✨ 変更点: keyを付与して状態を安定化
             edited_cart = st.data_editor(
                 calc_df, hide_index=True, key=f"cart_editor_{rk}",
                 column_config={
@@ -858,7 +845,6 @@ if menu == "📦 スピード仕入・解体":
                 use_container_width=True
             )
             
-            # ✨ 変更点: 数量・パックに加えて「手動修正された原価」もsession_stateに完全同期
             needs_rerun = False
             for idx, row in edited_cart.iterrows():
                 item_id = row['ID']
@@ -872,7 +858,6 @@ if menu == "📦 スピード仕入・解体":
                             needs_rerun = True
                         if s_item.get('unit_cost', 0) != row['自動計算原価']:
                             s_item['unit_cost'] = row['自動計算原価']
-                            # 原価の変更は画面に即反映されるため、ここでのrerunは不要（動作が軽くなります）
             
             if needs_rerun:
                 st.rerun()
@@ -881,6 +866,8 @@ if menu == "📦 スピード仕入・解体":
                 if st.button("🗑️ チェックした商品を外す"):
                     ids_to_keep = edited_cart[~edited_cart['削除']]['ID'].tolist()
                     st.session_state['cart'] = [item for item in st.session_state['cart'] if item['id'] in ids_to_keep]
+                    # ✨ v4.9.1 削除バグ防止：リセットキーを更新して画面状態のズレを解消
+                    st.session_state['reset_key'] += 1 
                     st.rerun()
 
             st.divider()
