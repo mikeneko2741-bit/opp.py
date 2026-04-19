@@ -12,10 +12,9 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from gspread.exceptions import CellNotFound
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.8)
+# ⚙️ 設定・定数 (v4.8.1)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -652,10 +651,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.8)
+# 🖥️ アプリ画面 (v4.8.1)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.8")
+st.title("🎴 ぽっけぇ～道 管理システム v4.8.1")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
