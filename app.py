@@ -12,9 +12,10 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
+from gspread.exceptions import CellNotFound
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.7.1)
+# ⚙️ 設定・定数 (v4.8)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -111,6 +112,7 @@ def load_data():
             return pd.DataFrame()
     return pd.DataFrame()
 
+# ✨ 差分更新方式（Upsert）による在庫DBの安全な書き込み
 def save_data(df):
     ws_inv, _, _, _ = check_and_init_sheets()
     if not ws_inv:
@@ -215,6 +217,7 @@ def load_sales_data():
             return pd.DataFrame()
     return pd.DataFrame()
 
+# ✨ 差分更新方式（Upsert）による売上帳の安全な書き込み
 def save_sales_data(df):
     _, _, ws_sales, _ = check_and_init_sheets()
     if not ws_sales:
@@ -318,6 +321,7 @@ def load_purchase_data():
             return pd.DataFrame()
     return pd.DataFrame()
 
+# ✨ 差分更新方式（Upsert）による仕入帳の安全な書き込み
 def save_purchase_data(df):
     _, ws_pur, _, _ = check_and_init_sheets()
     if not ws_pur:
@@ -445,7 +449,16 @@ def load_cart_draft(session_id):
             return []
     return []
 
+# ✨ v4.8 神の計算機リファクタリング：時系列と優先順位の完全保証
 def recalculate_moving_average_costs():
+    """
+    【神の計算機：移動平均原価の再計算】
+    - 登録日時をdatetime型に変換し、正確な時系列順を担保
+    - 同一秒に発生した処理は、必ず「仕入(0) → 売却(1)」の順序を強制し、在庫マイナスバグを防止
+    - 計算上マイナスになった場合は0に補正し警告を出力
+    - PSAやオリパのシステム記録もすべて含めて正確に計算
+    - 最終的に在庫DBの「原価」カラムのみを安全に更新
+    """
     df_inv = load_data()
     df_pur = load_purchase_data()
     df_sales = load_sales_data()
@@ -456,21 +469,27 @@ def recalculate_moving_average_costs():
     events = []
     
     for _, row in df_pur.iterrows():
+        dt = pd.to_datetime(row['登録日時'], errors='coerce')
+        if pd.isna(dt): dt = datetime.min
         events.append({
-            'time': row['登録日時'], 'type': 'pur', 
+            'time': dt, 'type_priority': 0, 
             'name': str(row['商品名']).strip(), 'pack': str(row.get('収録パック', '')).strip(),
             'cond': str(row.get('状態_PSA', 'A (美品)')).strip(),
             'qty': int(row['数量']), 'subtotal': int(row['小計'])
         })
+        
     for _, row in df_sales.iterrows():
+        dt = pd.to_datetime(row['登録日時'], errors='coerce')
+        if pd.isna(dt): dt = datetime.min
         events.append({
-            'time': row['登録日時'], 'type': 'sale', 
+            'time': dt, 'type_priority': 1, 
             'name': str(row['商品名']).strip(), 'pack': str(row.get('収録パック', '')).strip(),
             'cond': str(row.get('状態_PSA', 'A (美品)')).strip(),
             'qty': int(row['売却数'])
         })
         
-    events.sort(key=lambda x: (x['time'], 0 if x['type'] == 'pur' else 1))
+    # 時系列順にソート。同じ時間なら必ず「仕入(0)」が先になる
+    events.sort(key=lambda x: (x['time'], x['type_priority']))
     
     for ev in events:
         key = (ev['name'], ev['pack'], ev['cond'])
@@ -478,15 +497,19 @@ def recalculate_moving_average_costs():
             history[key] = {'qty': 0, 'cost': 0}
             
         state = history[key]
-        if ev['type'] == 'pur':
+        if ev['type_priority'] == 0:  # 仕入
             new_qty = state['qty'] + ev['qty']
             total_val = (state['qty'] * state['cost']) + ev['subtotal']
             state['cost'] = int(total_val / new_qty) if new_qty > 0 else 0
             state['qty'] = new_qty
-        elif ev['type'] == 'sale':
-            state['qty'] -= ev['qty']
-            if state['qty'] < 0: state['qty'] = 0
             
+        elif ev['type_priority'] == 1:  # 売却
+            state['qty'] -= ev['qty']
+            if state['qty'] < 0:
+                st.warning(f"⚠️ 履歴計算エラー: [{ev['pack']}]{ev['name']} の計算上在庫がマイナスになりました。0に補正します。")
+                state['qty'] = 0
+            
+    # 在庫DBの「原価」のみを更新
     for idx, row in df_inv.iterrows():
         key = (str(row['商品名']).strip(), str(row.get('収録パック', '')).strip(), str(row.get('状態_PSA', 'A (美品)')).strip())
         if key in history:
@@ -629,10 +652,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.7.1)
+# 🖥️ アプリ画面 (v4.8)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.7.1")
+st.title("🎴 ぽっけぇ～道 管理システム v4.8")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
