@@ -14,7 +14,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.8.1)
+# ⚙️ 設定・定数 (v4.9)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -50,7 +50,7 @@ def get_spreadsheet():
     if client:
         try:
             return client.open(SPREADSHEET_NAME)
-        except gspread.exceptions.SpreadsheetNotFound:
+        except Exception:
             return None
     return None
 
@@ -651,10 +651,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.8.1)
+# 🖥️ アプリ画面 (v4.9)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.8.1")
+st.title("🎴 ぽっけぇ～道 管理システム v4.9")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -778,6 +778,7 @@ if menu == "📦 スピード仕入・解体":
                     })
                     st.success("追加しました！"); st.rerun()
 
+# === 修正後: スピード仕入カート編集部 (完全同期) ===
     with col_right:
         st.subheader("② カートの中身と原価計算")
         
@@ -798,36 +799,51 @@ if menu == "📦 スピード仕入・解体":
                     else:
                         st.warning("下書きデータがありませんでした。")
 
+        # ✨ 総額の変更を検知するためのステート管理
+        if 'prev_total_paid' not in st.session_state:
+            st.session_state['prev_total_paid'] = 0
+
         with st.container(border=True):
             rk = st.session_state['reset_key']
             total_paid = st.number_input("支払った総額 (送料・手数料込み)", min_value=0, step=1000, key=f"total_paid_{rk}")
             purchase_title = st.text_input("仕入名目 (任意)", placeholder="例: 秋葉原福袋", key=f"purchase_title_{rk}")
             purchase_source = st.selectbox("仕入先", ["店舗", "フリマ(メルカリ等)", "オンラインオリパ", "問屋", "自己所有・過去の在庫", "その他"], key=f"purchase_source_{rk}")
             
+        # 総額が変更されたかチェック
+        recalc_cost_flag = False
+        if total_paid != st.session_state['prev_total_paid']:
+            recalc_cost_flag = True
+            st.session_state['prev_total_paid'] = total_paid
+            
         if not st.session_state['cart']:
             st.caption("カートは空です。")
         else:
             total_market_value = sum(item['qty'] * item['market_price'] for item in st.session_state['cart'])
             calculated_cart = []
+            
             for item in st.session_state['cart']:
-                item_total_market = item['qty'] * item['market_price']
-                if total_market_value > 0:
-                    ratio = item_total_market / total_market_value
-                    unit_cost = int((total_paid * ratio) / item['qty'])
-                else:
-                    unit_cost = 0
+                # ✨ 変更点: 総額が変わった時、またはまだ原価が計算されていない時だけ自動計算する
+                if recalc_cost_flag or 'unit_cost' not in item:
+                    item_total_market = item['qty'] * item['market_price']
+                    if total_market_value > 0:
+                        ratio = item_total_market / total_market_value
+                        item['unit_cost'] = int((total_paid * ratio) / item['qty'])
+                    else:
+                        item['unit_cost'] = 0
+                        
                 calculated_cart.append({
                     "削除": False, "ID": item['id'], "商品名": item['name'], "収録パック": item.get('pack', ''),
                     "状態": item['cond'],
                     "種類": item['type'], "数量": item['qty'],
-                    "自動計算原価": unit_cost, "参考相場": item['market_price']
+                    "自動計算原価": item['unit_cost'], "参考相場": item['market_price']
                 })
             
             calc_df = pd.DataFrame(calculated_cart)
             st.write(f"💡 カート内の相場合計: **¥{total_market_value:,}**")
             
+            # ✨ 変更点: keyを付与して状態を安定化
             edited_cart = st.data_editor(
-                calc_df, hide_index=True,
+                calc_df, hide_index=True, key=f"cart_editor_{rk}",
                 column_config={
                     "削除": st.column_config.CheckboxColumn("削除", default=False), 
                     "ID": None,
@@ -842,19 +858,22 @@ if menu == "📦 スピード仕入・解体":
                 use_container_width=True
             )
             
+            # ✨ 変更点: 数量・パックに加えて「手動修正された原価」もsession_stateに完全同期
             needs_rerun = False
             for idx, row in edited_cart.iterrows():
                 item_id = row['ID']
-                new_qty = row['数量']
-                new_pack = row['収録パック']
                 for s_item in st.session_state['cart']:
                     if s_item['id'] == item_id:
-                        if s_item['qty'] != new_qty:
-                            s_item['qty'] = new_qty
+                        if s_item['qty'] != row['数量']:
+                            s_item['qty'] = row['数量']
                             needs_rerun = True
-                        if s_item.get('pack', '') != new_pack:
-                            s_item['pack'] = new_pack
+                        if s_item.get('pack', '') != row['収録パック']:
+                            s_item['pack'] = row['収録パック']
                             needs_rerun = True
+                        if s_item.get('unit_cost', 0) != row['自動計算原価']:
+                            s_item['unit_cost'] = row['自動計算原価']
+                            # 原価の変更は画面に即反映されるため、ここでのrerunは不要（動作が軽くなります）
+            
             if needs_rerun:
                 st.rerun()
             
