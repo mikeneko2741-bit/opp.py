@@ -12,10 +12,9 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from gspread.exceptions import CellNotFound, APIError
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.9.1)
+# ⚙️ 設定・定数 (v4.9.2)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -449,7 +448,6 @@ def load_cart_draft(session_id):
             return []
     return []
 
-# ✨ 神の計算機リファクタリング：時系列と優先順位の完全保証
 def recalculate_moving_average_costs():
     df_inv = load_data()
     df_pur = load_purchase_data()
@@ -642,10 +640,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.9.1)
+# 🖥️ アプリ画面 (v4.9.2)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.9.1")
+st.title("🎴 ぽっけぇ～道 管理システム v4.9.2")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -866,7 +864,6 @@ if menu == "📦 スピード仕入・解体":
                 if st.button("🗑️ チェックした商品を外す"):
                     ids_to_keep = edited_cart[~edited_cart['削除']]['ID'].tolist()
                     st.session_state['cart'] = [item for item in st.session_state['cart'] if item['id'] in ids_to_keep]
-                    # ✨ v4.9.1 削除バグ防止：リセットキーを更新して画面状態のズレを解消
                     st.session_state['reset_key'] += 1 
                     st.rerun()
 
