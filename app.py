@@ -12,10 +12,9 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from gspread.exceptions import CellNotFound, APIError
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.7)
+# ⚙️ 設定・定数 (v4.7.1)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -112,7 +111,6 @@ def load_data():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# ✨ v4.7 差分更新方式（Upsert）による在庫DBの安全な書き込み
 def save_data(df):
     ws_inv, _, _, _ = check_and_init_sheets()
     if not ws_inv:
@@ -191,7 +189,7 @@ def save_data(df):
             try:
                 ws_inv.update_cells(cells_to_update)
                 break
-            except APIError as e:
+            except Exception as e:
                 if attempt == 2:
                     raise e
                 time.sleep(2 ** attempt)
@@ -217,7 +215,6 @@ def load_sales_data():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# ✨ v4.7 差分更新方式（Upsert）による売上帳の安全な書き込み
 def save_sales_data(df):
     _, _, ws_sales, _ = check_and_init_sheets()
     if not ws_sales:
@@ -292,7 +289,7 @@ def save_sales_data(df):
             try:
                 ws_sales.update_cells(cells_to_update)
                 break
-            except APIError as e:
+            except Exception as e:
                 if attempt == 2:
                     raise e
                 time.sleep(2 ** attempt)
@@ -321,7 +318,6 @@ def load_purchase_data():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# ✨ v4.7 差分更新方式（Upsert）による仕入帳の安全な書き込み
 def save_purchase_data(df):
     _, ws_pur, _, _ = check_and_init_sheets()
     if not ws_pur:
@@ -396,7 +392,7 @@ def save_purchase_data(df):
             try:
                 ws_pur.update_cells(cells_to_update)
                 break
-            except APIError as e:
+            except Exception as e:
                 if attempt == 2:
                     raise e
                 time.sleep(2 ** attempt)
@@ -420,7 +416,7 @@ def record_purchase_items(batch_id, date, title, source, note, items):
                 try:
                     ws_pur.append_rows(rows)
                     break
-                except APIError as e:
+                except Exception as e:
                     if attempt == 2:
                         raise e
                     time.sleep(2 ** attempt)
@@ -633,10 +629,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.7)
+# 🖥️ アプリ画面 (v4.7.1)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.7")
+st.title("🎴 ぽっけぇ～道 管理システム v4.7.1")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -908,7 +904,7 @@ if menu == "📦 スピード仕入・解体":
                     df_inv = pd.concat([df_inv, new_inv_df], ignore_index=True) if not df_inv.empty else new_inv_df
                 
                 save_data(df_inv)
-                load_data.clear() # キャッシュクリア
+                load_data.clear() 
                 
                 record_title = purchase_title if purchase_title else "一括仕入"
                 record_purchase_items(batch_id, purchase_date, record_title, purchase_source, "カート一括登録", purchase_items_for_log)
