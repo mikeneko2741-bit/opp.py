@@ -12,10 +12,9 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from gspread.exceptions import CellNotFound
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v4.5)
+# ⚙️ 設定・定数 (v4.5.1)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -209,7 +208,7 @@ def record_purchase_items(batch_id, date, title, source, note, items):
             ws_pur.append_rows(rows)
             load_purchase_data.clear()
 
-# ✨ v4.5 カート下書きの保存・復元処理
+# ✨ v4.5.1 カート下書きの保存・復元処理（安全版）
 def save_cart_draft(session_id, cart_data):
     _, _, _, ws_cart = check_and_init_sheets()
     if ws_cart:
@@ -218,7 +217,8 @@ def save_cart_draft(session_id, cart_data):
         try:
             cell = ws_cart.find(session_id, in_column=1)
             ws_cart.update(f'B{cell.row}:C{cell.row}', [[now_str, cart_json]])
-        except CellNotFound:
+        except Exception:
+            # 見つからなかった場合（または何らかのエラー時）は新規追加する安全設計
             ws_cart.append_row([session_id, now_str, cart_json])
 
 def load_cart_draft(session_id):
@@ -258,7 +258,6 @@ def recalculate_moving_average_costs():
             'qty': int(row['売却数'])
         })
         
-    # ✨ v4.5 修正点: 同時間の場合は、必ず仕入(pur=0)を先(sale=1)に計算する
     events.sort(key=lambda x: (x['time'], 0 if x['type'] == 'pur' else 1))
     
     for ev in events:
@@ -418,12 +417,11 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v4.5)
+# 🖥️ アプリ画面 (v4.5.1)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v4.5")
+st.title("🎴 ぽっけぇ～道 管理システム v4.5.1")
 
-# ✨ v4.5 セッションIDの発行（端末・スタッフごとの識別番号）
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
@@ -450,7 +448,6 @@ if menu == "📦 スピード仕入・解体":
             if st.button("検索", type="primary", use_container_width=True):
                 if search_word:
                     with st.spinner("検索中..."):
-                        # ✨ v4.5 エラー回避：カードラッシュの構造変更時もアプリが落ちないように保護
                         try:
                             st.session_state['search_res'] = search_card_rush(search_word)
                             st.session_state['has_searched'] = True
@@ -550,7 +547,6 @@ if menu == "📦 スピード仕入・解体":
     with col_right:
         st.subheader("② カートの中身と原価計算")
         
-        # ✨ v4.5 カート下書きの保存・復元ボタン
         c_save, c_load = st.columns(2)
         with c_save:
             if st.button("💾 現在のカートを下書き保存", use_container_width=True):
@@ -636,7 +632,6 @@ if menu == "📦 スピード仕入・解体":
 
             st.divider()
             if st.button("✨ この内容で在庫DBと帳簿に一括登録 ✨", type="primary", use_container_width=True):
-                # ✨ v4.5 同時操作対策: 保存の直前に必ず最新データを読み込み直す（キャッシュを破棄）
                 load_data.clear()
                 df_inv = load_data()
                 
@@ -732,7 +727,7 @@ elif menu == "📊 在庫・PSA管理":
                 single_options = {f"[{row['収録パック']}] {row['商品名']} (ID: {row['ID']})": row['ID'] for idx, row in df_single.iterrows()}
                 target_to_psa = st.selectbox("提出するカードを選択してください", options=list(single_options.keys()), index=None)
                 if target_to_psa and st.button("✈️ 「PSA提出中」にする", type="primary"):
-                    load_data.clear() # ✨ v4.5 同時操作対策
+                    load_data.clear()
                     df = load_data()
                     df.loc[df['ID'] == single_options[target_to_psa], 'ステータス'] = 'PSA提出中'
                     save_data(df)
@@ -775,7 +770,7 @@ elif menu == "📊 在庫・PSA管理":
                     with cc3: fee = st.number_input("鑑定費用 (円)", min_value=0, value=3300, step=100)
                     
                     if st.form_submit_button("結果を登録して原価を更新", type="primary"):
-                        load_data.clear() # ✨ v4.5 同時操作対策
+                        load_data.clear()
                         df = load_data()
                         target_id = psa_opts[target_ret]
                         df.loc[df['ID'] == target_id, '原価'] += fee
@@ -795,7 +790,7 @@ elif menu == "📊 在庫・PSA管理":
                     cancel_opts = {f"[{row['収録パック']}] {row['商品名']} [ID:{row['ID']}]": row['ID'] for idx, row in df_psa_pending.iterrows()}
                     target_cancel = st.selectbox("キャンセルするカード", options=list(cancel_opts.keys()), key="cancel_psa")
                     if target_cancel and st.button("通常在庫に戻す", key="btn_cancel"):
-                        load_data.clear() # ✨ v4.5 同時操作対策
+                        load_data.clear()
                         df = load_data()
                         df.loc[df['ID'] == cancel_opts[target_cancel], 'ステータス'] = '在庫あり'
                         save_data(df)
@@ -811,7 +806,7 @@ elif menu == "📊 在庫・PSA管理":
                     crack_opts = {f"[{row['収録パック']}] {row['商品名']} ({row['状態_PSA']}) [ID:{row['ID']}]": row['ID'] for idx, row in df_psa_done.iterrows()}
                     target_crack = st.selectbox("割るカードを選択", options=list(crack_opts.keys()), key="crack_psa")
                     if target_crack and st.button("ケースを割って通常在庫へ", key="btn_crack"):
-                        load_data.clear() # ✨ v4.5 同時操作対策
+                        load_data.clear()
                         df = load_data()
                         crack_id = crack_opts[target_crack]
                         df.loc[df['ID'] == crack_id, 'ステータス'] = '在庫あり'
@@ -857,7 +852,6 @@ elif menu == "📊 在庫・PSA管理":
                         total_cost = item_row['原価'] * sell_qty
                         profit = sell_price - fee - shipping_cost - total_cost
                         
-                        # ✨ v4.5 同時操作対策: 保存の直前に必ず最新データを読み込み直す（キャッシュを破棄）
                         load_data.clear()
                         df = load_data()
                         
@@ -904,7 +898,7 @@ elif menu == "📊 在庫・PSA管理":
             )
             
             if st.button("💾 変更・削除を保存する", type="primary"):
-                load_data.clear() # ✨ v4.5 同時操作対策
+                load_data.clear()
                 df_saved = load_data()
                 ids_to_keep = edited_df[~edited_df['削除']]['ID'].tolist()
                 df_saved = df_saved[df_saved['ID'].isin(ids_to_keep)].copy()
@@ -974,7 +968,7 @@ elif menu == "📊 在庫・PSA管理":
                             
                             if st.button("🚨 この内容で商品を統合し、過去の帳簿も書き換える", type="primary", use_container_width=True):
                                 with st.spinner("データベースを統合中..."):
-                                    load_data.clear() # ✨ v4.5 同時操作対策
+                                    load_data.clear()
                                     df = load_data()
                                     
                                     ids_to_remove = selected_for_merge['ID'].tolist()
@@ -1030,7 +1024,7 @@ elif menu == "📊 在庫・PSA管理":
                     st.markdown("#### 🌐 最新相場の一括取得・更新")
                     st.caption("カードラッシュの最新価格を取得し、在庫の参考相場を上書きします。（※『データ編集』タブで【相場自動更新】がOFFになっているマイナー品はスキップされます）")
                     if st.button("🔄 自動更新ONのカードの相場を最新にする", use_container_width=True):
-                        load_data.clear() # ✨ v4.5 同時操作対策
+                        load_data.clear()
                         df_inv_maint = load_data()
                         items_to_update = df_inv_maint[(df_inv_maint['相場更新'] == True) & (df_inv_maint['ステータス'] != '売却済み')]
                         unique_queries = items_to_update[['商品名', '収録パック']].drop_duplicates()
@@ -1058,7 +1052,7 @@ elif menu == "📊 在庫・PSA管理":
                                         mask = (df_inv_maint['商品名'] == orig_name) & (df_inv_maint['収録パック'] == orig_pack)
                                         df_inv_maint.loc[mask, '参考相場'] = best_match['price']
                                 except Exception as e:
-                                    pass # エラー時は既存の価格を安全にキープする
+                                    pass
                                 
                                 progress_bar.progress((i + 1) / total_items)
                                 
@@ -1153,7 +1147,7 @@ elif menu == "🛍️ オリパ工場":
                     
                     if is_valid and oripa_name:
                         if st.button("🔨 この内容でオリパを作成 (在庫を消費)", type="primary", use_container_width=True):
-                            load_data.clear() # ✨ v4.5 同時操作対策
+                            load_data.clear()
                             df = load_data()
                             
                             for idx, row in selected_items.iterrows():
@@ -1239,7 +1233,7 @@ elif menu == "📖 帳簿・分析":
             target_undo = st.selectbox("取り消す取引を選択", options=list(undo_opts.keys()), index=None)
             
             if target_undo and st.button("🚨 この取引を取り消す", type="primary"):
-                load_data.clear() # ✨ v4.5 同時操作対策
+                load_data.clear()
                 df_inv = load_data()
                 
                 sale_id = undo_opts[target_undo]
@@ -1291,7 +1285,7 @@ elif menu == "📖 帳簿・分析":
             target_pur_undo = st.selectbox("取り消す仕入を選択してください", options=list(pur_undo_opts.keys()), index=None)
             
             if target_pur_undo and st.button("🚨 この仕入を取り消す", type="primary"):
-                load_data.clear() # ✨ v4.5 同時操作対策
+                load_data.clear()
                 df_inv = load_data()
                 
                 pur_id = pur_undo_opts[target_pur_undo]
@@ -1362,7 +1356,7 @@ elif menu == "📖 帳簿・分析":
                         csv_sales = filtered_sales.to_csv(index=False).encode('utf-8-sig')
                         st.download_button(label="📥 指定期間の【売上帳】をダウンロード", data=csv_sales, file_name=f"売上帳_{start_str}_to_{end_str}.csv", mime='text/csv', key='dl_sales', use_container_width=True)
                     else:
-                        st.button("📥 指定期間の【売上帳】をダウンロード", disabled=True, help="この期間のデータはありません", key='dl_sales_dis', use_container_width=True)
+                        st.button("📥 指定期間の【売上帳】をダウンロード", disabled=True, help="この期間의データはありません", key='dl_sales_dis', use_container_width=True)
                 else:
                     st.caption("売上データがありません")
 
