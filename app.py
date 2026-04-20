@@ -15,7 +15,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.3)
+# ⚙️ 設定・定数 (v5.4)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -202,6 +202,7 @@ def save_data(df):
                 try:
                     if s_old and s_new and float(s_old) == float(s_new): continue
                 except ValueError: pass
+                if s_old.upper() == s_new.upper() and s_new.upper() in ['TRUE', 'FALSE']: continue
                 if s_old != s_new:
                     val = "" if pd.isna(new_val) else new_val
                     cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value=val))
@@ -536,18 +537,18 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.3)
+# 🖥️ アプリ画面 (v5.4)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.3")
+st.title("🎴 ぽっけぇ～道 管理システム v5.4")
 
-# セッションステートの初期化（スキャナー強制リセット用キーを追加）
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
 if 'has_searched' not in st.session_state: st.session_state['has_searched'] = False
 if 'reset_key' not in st.session_state: st.session_state['reset_key'] = 0
 if 'oripa_scanned' not in st.session_state: st.session_state['oripa_scanned'] = []
 if 'sell_cart' not in st.session_state: st.session_state['sell_cart'] = []
+# ✨ スキャナー強制リセット用のキー
 if 'scanner_key_oripa' not in st.session_state: st.session_state['scanner_key_oripa'] = 0
 if 'scanner_key_sell' not in st.session_state: st.session_state['scanner_key_sell'] = 0
 
@@ -731,7 +732,7 @@ elif menu == "📊 在庫・PSA管理":
                         save_sales_data(df_s)
                         st.success("登録完了"); time.sleep(1); st.rerun()
 
-        # ✨ 売却レジ
+        # ✨ v5.4 スキャナー強制リセット搭載
         with tab_sell:
             st.subheader("🛒 売却レジ (まとめ買いスキャン対応)")
             c_left, c_right = st.columns([1.2, 1])
@@ -762,13 +763,15 @@ elif menu == "📊 在庫・PSA管理":
                                 'cond': trow['状態_PSA'], 'cost': int(trow['原価']), 
                                 'sell_price': def_price, 'qty': 1, 'max_qty': int(trow['在庫数'])
                             })
-                            # ✨v5.3 トースト通知に変更
                             st.toast(f"✅ レジに追加しました: {trow['商品名']}", icon="🛒")
-                            time.sleep(0.5); st.rerun()
                         else:
                             st.toast("⚠️ すでにレジに入っています。数量を変更してください。", icon="⚠️")
                     else:
                         st.toast("❌ 在庫が見つかりません。", icon="❌")
+                    
+                    # ✨ゾンビ防止のためのスキャナー強制リセット
+                    st.session_state['scanner_key_sell'] += 1
+                    st.rerun()
 
                 st.write("---")
                 if not st.session_state['sell_cart']:
@@ -849,7 +852,6 @@ elif menu == "📊 在庫・PSA管理":
                             save_sales_data(pd.concat([df_sales_s, pd.DataFrame(sales_records)], ignore_index=True))
                             
                             st.session_state['sell_cart'] = []
-                            # ✨スキャナーのリセット
                             st.session_state['scanner_key_sell'] += 1
                             st.success(f"🎉 お会計完了！ (レシート番号: {receipt_id})"); time.sleep(2); st.rerun()
 
@@ -949,23 +951,36 @@ elif menu == "🛍️ オリパ工場":
             scan_oripa = None
             
             if scan_mode == "🔫 物理スキャナー":
-                # ✨強制リセット用キーを追加
                 sid = st.text_input("📷 スキャンして追加 (ID入力)", key=f"scan_oripa_txt_{st.session_state['scanner_key_oripa']}")
                 if sid: scan_oripa = sid
             else:
-                st.info("カメラへのアクセスを許可し、シールのQRコードをかざしてください。自動で連続スキャンされます。")
-                # ✨強制リセット用キーを追加
                 cid = camera_qr_scanner(key=f"cam_oripa_scan_{st.session_state['scanner_key_oripa']}")
                 if cid: scan_oripa = cid
 
             if scan_oripa and scan_oripa not in st.session_state['oripa_scanned']:
                 if scan_oripa in df_av['ID'].values:
                     st.session_state['oripa_scanned'].append(scan_oripa)
-                    # ✨v5.3 トースト通知に変更（画面が更新されても消えません）
                     st.toast(f"✅ スキャン完了: {scan_oripa} を追加しました！", icon="🎉")
                 else:
                     st.toast(f"⚠️ 在庫が見つかりません: {scan_oripa}", icon="⚠️")
-                    
+                
+                # ✨スキャナー強制リセット
+                st.session_state['scanner_key_oripa'] += 1
+                st.rerun()
+
+            # ✨ v5.4 スキャン確認ウィンドウの追加
+            if st.session_state['oripa_scanned']:
+                st.markdown("##### 📷 スキャン確認ウィンドウ")
+                st.info("現在スキャンされているカードの一覧です。手元のカードと照らし合わせてください。")
+                scanned_items = df_av[df_av['ID'].isin(st.session_state['oripa_scanned'])]
+                st.dataframe(
+                    scanned_items[['商品名', '状態_PSA', '原価', 'ID']], 
+                    hide_index=True, 
+                    use_container_width=True
+                )
+                st.divider()
+
+            st.markdown("##### 📦 全在庫リスト (使用数の調整・手動選択)")
             df_av['オリパに使う'] = False; df_av['使用数'] = 0
             for s in st.session_state['oripa_scanned']:
                 if s in df_av['ID'].values: df_av.loc[df_av['ID'] == s, 'オリパに使う'], df_av.loc[df_av['ID'] == s, '使用数'] = True, 1
@@ -973,10 +988,9 @@ elif menu == "🛍️ オリパ工場":
             sel_o = o_ed[(o_ed['オリパに使う'] == True) & (o_ed['使用数'] > 0)]
             
         with col_r:
-            # ✨v5.3 完全リセット機能
             if st.button("🗑️ スキャン履歴クリア"):
                 st.session_state['oripa_scanned'] = []
-                st.session_state['scanner_key_oripa'] += 1 # スキャナーを強制再起動
+                st.session_state['scanner_key_oripa'] += 1 
                 st.rerun()
                 
             o_name = st.text_input("オリパ名称")
@@ -998,7 +1012,7 @@ elif menu == "🛍️ オリパ工場":
                     df = pd.concat([df, pd.DataFrame([{'ID': "O"+str(uuid.uuid4())[:7], '商品名': f"【オリパ】{o_name}", '種類': 'オリジナルパック', '在庫数': total_u, '原価': u_cost, '参考相場': u_price, 'ステータス': '在庫あり', '仕入日': datetime.now().strftime('%Y-%m-%d'), '相場更新': False, '重量': '', '個別メモ': ''}])], ignore_index=True)
                     save_data(df); save_sales_data(pd.concat([load_sales_data(), pd.DataFrame(s_recs)], ignore_index=True))
                     st.session_state['oripa_scanned'] = []
-                    st.session_state['scanner_key_oripa'] += 1 # スキャナーを強制再起動
+                    st.session_state['scanner_key_oripa'] += 1 
                     st.success("作成完了"); st.rerun()
 
 # =========================================================
