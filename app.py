@@ -15,7 +15,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.7)
+# ⚙️ 設定・定数 (v5.8)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -26,7 +26,7 @@ SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
 
 # ---------------------------------------------------------
-# 📷 スマホ内蔵カメラ用 QRスキャナー部品 (v5.7 レイアウトかぶり防止策)
+# 📷 スマホ内蔵カメラ用 QRスキャナー部品
 # ---------------------------------------------------------
 QR_HTML = """
 <!DOCTYPE html>
@@ -180,6 +180,7 @@ def load_data():
         except Exception: return pd.DataFrame()
     return pd.DataFrame()
 
+# ✨ v5.8 キャッシュの強制クリア機能を追加
 def save_data(df):
     ws_inv, _, _, _ = check_and_init_sheets()
     if not ws_inv: return df
@@ -214,6 +215,7 @@ def save_data(df):
                 try:
                     if s_old and s_new and float(s_old) == float(s_new): continue
                 except ValueError: pass
+                if s_old.upper() == s_new.upper() and s_new.upper() in ['TRUE', 'FALSE']: continue
                 if s_old != s_new:
                     val = "" if pd.isna(new_val) else new_val
                     cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value=val))
@@ -234,6 +236,7 @@ def save_data(df):
             except Exception as e:
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
+    load_data.clear() # ✨ v5.8 追加
     return df_to_save
 
 @st.cache_data(ttl=60)
@@ -303,6 +306,7 @@ def save_sales_data(df):
             except Exception as e:
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
+    load_sales_data.clear() # ✨ v5.8 追加
     return df_to_save
 
 @st.cache_data(ttl=60)
@@ -374,6 +378,7 @@ def save_purchase_data(df):
             except Exception as e:
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
+    load_purchase_data.clear() # ✨ v5.8 追加
     return df_to_save
 
 def record_purchase_items(batch_id, date, title, source, note, items):
@@ -545,10 +550,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.7)
+# 🖥️ アプリ画面 (v5.8)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.7")
+st.title("🎴 ぽっけぇ～道 管理システム v5.8")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -829,7 +834,6 @@ elif menu == "📊 在庫・PSA管理":
                             st.rerun()
 
             with c_right:
-                # ✨ v5.7 売却レジ用クリアボタンを配置
                 if st.button("🗑️ カートとスキャン履歴をクリア", use_container_width=True):
                     st.session_state['sell_cart'] = []
                     st.rerun()
@@ -932,7 +936,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価を全再計算する (神の計算機)", on_click=lambda: save_data(recalculate_moving_average_costs()))
 
 # =========================================================
-# 🖨️ 個別管理・ラベル
+# 🖨️ 個別管理・ラベル (✨v5.8 リアルタイム印字対応)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -962,17 +966,22 @@ elif menu == "🖨️ 個別管理・ラベル":
                 for _, r in l_ed.iterrows():
                     df_s.loc[df_s['ID'] == r['ID'], '重量'] = r['重量']
                     df_s.loc[df_s['ID'] == r['ID'], '個別メモ'] = r['個別メモ']
-                save_data(df_s); st.success("保存完了"); st.rerun()
+                save_data(df_s); st.success("保存完了！最新の状態がシールに反映されます。"); st.rerun()
                 
             sel_p = l_ed[l_ed['印刷対象'] == True]
             st.divider()
             st.markdown("##### 🖨️ 2. ラベル用紙への印刷 (A4・24面)")
-            st.caption("※ショップ名を削除し、メモが印字される新デザインです。")
-            
-            start_pos = st.number_input("📌 印刷開始位置 (1〜24)", min_value=1, max_value=24, value=1, help="使いかけのシール用紙を使う場合、何番目のシールから印刷を始めるかを指定します。")
+            start_pos = st.number_input("📌 印刷開始位置 (1〜24)", min_value=1, max_value=24, value=1)
             
             if not sel_p.empty:
-                items = [df_act[df_act['ID'] == r['ID']].iloc[0].to_dict() for _, r in sel_p.iterrows()]
+                items = []
+                for _, r in sel_p.iterrows():
+                    orig_item = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict()
+                    # ✨ 画面上で打ち込んだ「重量」「メモ」を直接シールに流し込む（保存ボタンを押し忘れても印字される）
+                    orig_item['重量'] = r['重量']
+                    orig_item['個別メモ'] = r['個別メモ']
+                    items.append(orig_item)
+                
                 st.download_button(f"📄 {len(items)}枚のラベルHTMLをダウンロード", generate_label_html(items, start_pos=start_pos), file_name=f"labels_start{start_pos}.html", mime="text/html", type="primary")
             else:
                 st.button("📄 ラベルHTMLをダウンロード", disabled=True)
@@ -1010,10 +1019,8 @@ elif menu == "🛍️ オリパ工場":
                         st.session_state['oripa_scanned'].append(scan_oripa)
                         added_item_name = df_av[df_av['ID'] == scan_oripa].iloc[0]['商品名']
                         st.toast(f"✅ スキャン完了: {added_item_name} を追加しました！", icon="🎉")
-                    else:
-                        st.toast(f"⚠️ すでに追加されています: {scan_oripa}", icon="⚠️")
-                else:
-                    st.toast(f"❌ 在庫が見つかりません: {scan_oripa}", icon="❌")
+                    else: st.toast(f"⚠️ すでに追加されています: {scan_oripa}", icon="⚠️")
+                else: st.toast(f"❌ 在庫が見つかりません: {scan_oripa}", icon="❌")
                 st.rerun()
 
             if st.session_state['oripa_scanned']:
@@ -1021,11 +1028,7 @@ elif menu == "🛍️ オリパ工場":
                     st.markdown("#### 📥 今回の封入リスト（スキャン済）")
                     scanned_items = df_av[df_av['ID'].isin(st.session_state['oripa_scanned'])]
                     if not scanned_items.empty:
-                        st.dataframe(
-                            scanned_items[['商品名', '状態_PSA', '原価', 'ID', '個別メモ']], 
-                            hide_index=True, 
-                            use_container_width=True
-                        )
+                        st.dataframe(scanned_items[['商品名', '状態_PSA', '原価', 'ID', '個別メモ']], hide_index=True, use_container_width=True)
                 st.divider()
 
             st.markdown("##### 📦 全在庫リスト (手動選択も可能)")
