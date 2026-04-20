@@ -15,7 +15,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.8)
+# ⚙️ 設定・定数 (v5.9)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -180,7 +180,6 @@ def load_data():
         except Exception: return pd.DataFrame()
     return pd.DataFrame()
 
-# ✨ v5.8 キャッシュの強制クリア機能を追加
 def save_data(df):
     ws_inv, _, _, _ = check_and_init_sheets()
     if not ws_inv: return df
@@ -236,7 +235,7 @@ def save_data(df):
             except Exception as e:
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
-    load_data.clear() # ✨ v5.8 追加
+    load_data.clear()
     return df_to_save
 
 @st.cache_data(ttl=60)
@@ -306,7 +305,7 @@ def save_sales_data(df):
             except Exception as e:
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
-    load_sales_data.clear() # ✨ v5.8 追加
+    load_sales_data.clear()
     return df_to_save
 
 @st.cache_data(ttl=60)
@@ -378,7 +377,7 @@ def save_purchase_data(df):
             except Exception as e:
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
-    load_purchase_data.clear() # ✨ v5.8 追加
+    load_purchase_data.clear()
     return df_to_save
 
 def record_purchase_items(batch_id, date, title, source, note, items):
@@ -550,10 +549,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.8)
+# 🖥️ アプリ画面 (v5.9)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.8")
+st.title("🎴 ぽっけぇ～道 管理システム v5.9")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -640,7 +639,10 @@ if menu == "📦 スピード仕入・解体":
                     st.rerun()
 
     with col_right:
-        st.subheader("② カートの中身と原価計算")
+        # ✨ v5.9: 仕入カートの商品数を表示
+        total_cart_qty = sum(item['qty'] for item in st.session_state['cart'])
+        st.subheader(f"② カートの中身と原価計算 (計 {total_cart_qty} 点)")
+        
         c_save, c_load = st.columns(2)
         with c_save:
             if st.button("💾 下書き保存", use_container_width=True):
@@ -801,7 +803,10 @@ elif menu == "📊 在庫・PSA管理":
                 if not st.session_state['sell_cart']:
                     st.info("商品をスキャンするか、リストから選んでレジに追加してください。")
                 else:
-                    st.markdown("#### 🛍️ お会計カート")
+                    # ✨ v5.9: 売却レジのカート商品数を表示
+                    total_sell_qty = sum(item['qty'] for item in st.session_state['sell_cart'])
+                    st.markdown(f"#### 🛍️ お会計カート (計 {total_sell_qty} 点)")
+                    
                     df_sell_cart = pd.DataFrame(st.session_state['sell_cart'])
                     edited_sell = st.data_editor(
                         df_sell_cart[['削除', 'name', 'cond', 'sell_price', 'qty', 'id']],
@@ -844,8 +849,11 @@ elif menu == "📊 在庫・PSA管理":
                     else:
                         total_sales = sum(item['sell_price'] * item['qty'] for item in st.session_state['sell_cart'])
                         total_cost = sum(item['cost'] * item['qty'] for item in st.session_state['sell_cart'])
+                        total_sell_qty = sum(item['qty'] for item in st.session_state['sell_cart'])
                         
                         st.markdown(f"### 💰 売上合計: ¥{total_sales:,}")
+                        # ✨ v5.9: お買い上げ点数を強調表示
+                        st.write(f"🛒 お買い上げ点数: **{total_sell_qty} 点**")
                         st.caption(f"原価合計: ¥{total_cost:,}")
                         
                         ch = st.selectbox("販路", ["BASE (Web)", "BASE (PayID)", "メルカリ", "店舗・直接", "その他"])
@@ -936,7 +944,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価を全再計算する (神の計算機)", on_click=lambda: save_data(recalculate_moving_average_costs()))
 
 # =========================================================
-# 🖨️ 個別管理・ラベル (✨v5.8 リアルタイム印字対応)
+# 🖨️ 個別管理・ラベル
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -977,7 +985,6 @@ elif menu == "🖨️ 個別管理・ラベル":
                 items = []
                 for _, r in sel_p.iterrows():
                     orig_item = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict()
-                    # ✨ 画面上で打ち込んだ「重量」「メモ」を直接シールに流し込む（保存ボタンを押し忘れても印字される）
                     orig_item['重量'] = r['重量']
                     orig_item['個別メモ'] = r['個別メモ']
                     items.append(orig_item)
@@ -1023,9 +1030,10 @@ elif menu == "🛍️ オリパ工場":
                 else: st.toast(f"❌ 在庫が見つかりません: {scan_oripa}", icon="❌")
                 st.rerun()
 
+            # ✨ v5.9: スキャン枚数の表示を追加
             if st.session_state['oripa_scanned']:
                 with st.container(border=True):
-                    st.markdown("#### 📥 今回の封入リスト（スキャン済）")
+                    st.markdown(f"#### 📥 今回の封入リスト（スキャン済: {len(st.session_state['oripa_scanned'])} 枚）")
                     scanned_items = df_av[df_av['ID'].isin(st.session_state['oripa_scanned'])]
                     if not scanned_items.empty:
                         st.dataframe(scanned_items[['商品名', '状態_PSA', '原価', 'ID', '個別メモ']], hide_index=True, use_container_width=True)
@@ -1051,7 +1059,14 @@ elif menu == "🛍️ オリパ工場":
             if not sel_o.empty:
                 m_cost = sum(sel_o['原価'] * sel_o['使用数']); e_cost = (s_fee + p_fee) * total_u
                 t_cost = m_cost + e_cost; u_cost = int(t_cost / total_u)
-                st.metric("総原価", f"¥{t_cost:,}"); st.metric("見込み純利益", f"¥{(u_price * total_u) - t_cost:,}")
+                
+                # ✨ v5.9: 選択枚数を青枠で強調表示
+                st.info(f"🃏 現在選択されているカード: **{sum(sel_o['使用数'])} 枚**")
+                
+                mc1, mc2 = st.columns(2)
+                mc1.metric("総原価", f"¥{t_cost:,}")
+                mc2.metric("見込み純利益", f"¥{(u_price * total_u) - t_cost:,}")
+                
                 if o_name and st.button("🔨 オリパ作成", type="primary", use_container_width=True):
                     df = load_data()
                     s_recs = []
