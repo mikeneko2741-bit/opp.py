@@ -12,9 +12,10 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
+import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.0.1)
+# ⚙️ 設定・定数 (v5.1)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -23,6 +24,60 @@ SHEET_INVENTORY = '在庫DB'
 SHEET_PURCHASE = '仕入帳'
 SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
+
+# ---------------------------------------------------------
+# 📷 スマホ内蔵カメラ用 QRスキャナー部品 (裏技実装)
+# ---------------------------------------------------------
+QR_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 5px; }
+    #reader { width: 100%; max-width: 500px; margin: 0 auto; border-radius: 8px; overflow: hidden; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <div id="reader"></div>
+  <script>
+    function sendValue(val) {
+      window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value: val }, "*");
+    }
+    window.onload = function() {
+      window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+      const observer = new MutationObserver(() => {
+        window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: document.body.scrollHeight + 20 }, "*");
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      let lastScanned = "";
+      let scanner = new Html5QrcodeScanner("reader", { 
+          fps: 10, 
+          qrbox: {width: 250, height: 250},
+          aspectRatio: 1.0
+      }, false);
+      scanner.render(function(txt) {
+        if (txt !== lastScanned) {
+            lastScanned = txt;
+            sendValue(txt);
+        }
+      });
+    };
+  </script>
+</body>
+</html>
+"""
+
+def camera_qr_scanner(key=None):
+    comp_dir = os.path.join(os.path.dirname(__file__), "qr_cam_comp")
+    if not os.path.exists(comp_dir):
+        os.makedirs(comp_dir)
+    idx_path = os.path.join(comp_dir, "index.html")
+    with open(idx_path, "w", encoding="utf-8") as f:
+        f.write(QR_HTML)
+    _scanner = components.declare_component("camera_qr_scanner", path=comp_dir)
+    return _scanner(key=key, default=None)
 
 # ---------------------------------------------------------
 # 🔌 データベース接続＆初期化機能
@@ -495,10 +550,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.0.1)
+# 🖥️ アプリ画面 (v5.1)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.0.1")
+st.title("🎴 ぽっけぇ～道 管理システム v5.1")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -681,18 +736,36 @@ elif menu == "📊 在庫・PSA管理":
                         else:
                             df.loc[df['ID'] == tid, 'ステータス'], df.loc[df['ID'] == tid, '状態_PSA'], df.loc[df['ID'] == tid, 'PSA番号'], df.loc[df['ID'] == tid, '原価'] = '鑑定済み', f"PSA {gr}", cert, new_cost
                         save_data(df)
-                        # 売上帳にシステム移行記録
                         df_s = load_sales_data()
                         df_s = pd.concat([df_s, pd.DataFrame([{'ID': "S"+str(uuid.uuid4())[:7], '元の在庫ID': tid, '売却日': datetime.now().strftime('%Y-%m-%d'), '商品名': trow['商品名'], '収録パック': trow['収録パック'], '状態_PSA': trow['状態_PSA'], '売却数': 1, '売上額': 0, '手数料': 0, '経費_送料': 0, '純利益': 0, '販路': 'システム：PSA移行', '備考': 'PSA登録による自動処理', '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}])], ignore_index=True)
                         save_sales_data(df_s)
                         st.success("登録完了"); time.sleep(1); st.rerun()
 
         with tab_sell:
-            st.subheader("🛒 売却レジ (スキャン対応)")
-            scan_id = st.text_input("📷 QR/バーコード スキャン (ID入力)", key="scan_sell")
+            st.subheader("🛒 売却レジ (二刀流スキャン対応)")
+            
+            scan_mode = st.radio("読み取り方法を選択", ["🔫 物理スキャナー (USB等)", "📱 スマホ内蔵カメラ"], horizontal=True)
+            target_sell_id = None
+            
+            if scan_mode == "🔫 物理スキャナー (USB等)":
+                scan_sell = st.text_input("📷 スキャン (ID入力してEnter)", key="scan_sell_input")
+                if scan_sell: target_sell_id = scan_sell
+            else:
+                st.info("カメラへのアクセスを許可し、枠内にQRコードを写してください。")
+                cam_sell = camera_qr_scanner(key="cam_scan_sell")
+                if cam_sell: target_sell_id = cam_sell
+
             active_ids = {f"[{r['収録パック']}] {r['商品名']} ({r['状態_PSA']} | 残:{r['在庫数']}) [ID:{r['ID']}]": r['ID'] for _, r in df_active[df_active['在庫数'] > 0].iterrows()}
-            sel_idx = list(active_ids.values()).index(scan_id) if scan_id in active_ids.values() else None
+            
+            if target_sell_id:
+                if target_sell_id in active_ids.values():
+                    st.success("✅ スキャン成功！商品が選択されました。")
+                else:
+                    st.warning("該当する在庫が見つかりません。")
+            
+            sel_idx = list(active_ids.values()).index(target_sell_id) if target_sell_id in active_ids.values() else None
             target_sell_label = st.selectbox("売却商品を選択", options=list(active_ids.keys()), index=sel_idx)
+
             if target_sell_label:
                 tid = active_ids[target_sell_label]
                 trow = df_active[df_active['ID'] == tid].iloc[0]
@@ -743,9 +816,7 @@ elif menu == "📊 在庫・PSA管理":
                         for _, s_row in selected_split.iterrows():
                             tid, qty = s_row['ID'], int(s_row['在庫数'])
                             orig_row = df_main[df_main['ID'] == tid].iloc[0]
-                            # 元の行を削除
                             df_main = df_main[df_main['ID'] != tid]
-                            # 数量分だけ新しい行を追加
                             for _ in range(qty):
                                 new_r = orig_row.copy()
                                 new_r['ID'], new_r['在庫数'] = "P" + str(uuid.uuid4())[:7], 1
@@ -805,16 +876,35 @@ elif menu == "🛍️ オリパ工場":
     df = load_data()
     if not df.empty:
         df_av = df[(df['ステータス'] == '在庫あり') | (df['ステータス'] == '鑑定済み')].copy()
-        sid = st.text_input("📷 スキャンして追加 (ID入力)", key="scan_oripa")
-        if sid and sid not in st.session_state['oripa_scanned'] and sid in df_av['ID'].values:
-            st.session_state['oripa_scanned'].append(sid); st.success(f"追加: {sid}")
+        
         col_l, col_r = st.columns([1.5, 1])
         with col_l:
+            st.subheader("① 封入するカード・素材の選択")
+            
+            scan_mode = st.radio("素材の追加方法", ["🔫 物理スキャナー", "📱 スマホ内蔵カメラ (連続可)"], horizontal=True)
+            scan_oripa = None
+            
+            if scan_mode == "🔫 物理スキャナー":
+                sid = st.text_input("📷 スキャンして追加 (ID入力)", key="scan_oripa_txt")
+                if sid: scan_oripa = sid
+            else:
+                st.info("カメラへのアクセスを許可し、シールのQRコードをかざしてください。自動で連続スキャンされます。")
+                cid = camera_qr_scanner(key="cam_oripa_scan")
+                if cid: scan_oripa = cid
+
+            if scan_oripa and scan_oripa not in st.session_state['oripa_scanned']:
+                if scan_oripa in df_av['ID'].values:
+                    st.session_state['oripa_scanned'].append(scan_oripa)
+                    st.success(f"✅ スキャン完了: {scan_oripa} を追加しました！")
+                else:
+                    st.warning(f"⚠️ 在庫が見つかりません: {scan_oripa}")
+                    
             df_av['オリパに使う'] = False; df_av['使用数'] = 0
             for s in st.session_state['oripa_scanned']:
                 if s in df_av['ID'].values: df_av.loc[df_av['ID'] == s, 'オリパに使う'], df_av.loc[df_av['ID'] == s, '使用数'] = True, 1
             o_ed = st.data_editor(df_av[['オリパに使う', '商品名', '原価', '在庫数', '使用数', 'ID', '個別メモ']], hide_index=True, use_container_width=True)
             sel_o = o_ed[(o_ed['オリパに使う'] == True) & (o_ed['使用数'] > 0)]
+            
         with col_r:
             if st.button("🗑️ スキャン履歴クリア"): st.session_state['oripa_scanned'] = []; st.rerun()
             o_name = st.text_input("オリパ名称")
