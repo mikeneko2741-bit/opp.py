@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.16)
+# ⚙️ 設定・定数 (v5.17)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -499,39 +499,44 @@ def clean_product_name(text):
     if not isinstance(text, str): return str(text)
     return re.sub(r'\{-}.*$', '', text).strip()
 
-# ✨ v5.16 超・強力なキーワードクリーニング（投網漁） ✨
+# ✨ v5.17 検索キーワードへの「型番添え」 ✨
 def generate_search_keyword(orig_name):
     is_box = "BOX" in orig_name.upper() or "ｂｏｘ" in orig_name.lower()
     cleaned = str(orig_name)
     
-    # 1. 不要な単語を削除
+    # 検索前に「型番（例：127/100）」を抜き出しておく
+    col_match = re.search(r'(\d{2,4}/\d{2,4})', cleaned)
+    col_number = col_match.group(1) if col_match else ""
+    
+    # 不要な単語や記号を根こそぎ消去
     remove_words = ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]
     for w in remove_words:
         cleaned = cleaned.replace(w, "")
         
-    # 2. 波カッコ{}、角カッコ[]、隅付きカッコ【】、丸カッコ() とその中身を完全に消去
-    # 例: {127/100} や [SV9] や 【SAR】 を消す
     cleaned = re.sub(r'【.*?】|\[.*?\]|\(.*?\)|\{.*?\}', ' ', cleaned)
-    
-    # 3. かぎカッコ「」や『』は、カッコの「記号だけ」を消去（中身のパック名は残す）
-    # 例: 「サイバージャッジ」 -> サイバージャッジ
     cleaned = cleaned.replace('「', ' ').replace('」', ' ').replace('『', ' ').replace('』', ' ')
-    
-    # 4. 余分なスペースを1つにまとめてトリム
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     
     if is_box and "BOX" not in cleaned.upper(): 
         cleaned += " BOX"
         
-    # もし全て消えてしまったら元の名前でフォールバック
+    # 型番があれば、最後に添えて検索精度を爆上げする
+    if col_number and not is_box:
+        cleaned += f" {col_number}"
+        
     return cleaned.strip() if cleaned.strip() else orig_name.strip()
 
+# ✨ v5.17 絶対評価と即時除外を取り入れた究極スナイパー ✨
 def get_best_match(orig_name, orig_pack, results, item_type=""):
     ng_words = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱"]
     rarities = ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
     
     orig_name_clean = orig_name.strip().upper()
     orig_pack_clean = orig_pack.strip().upper() if orig_pack else ""
+    
+    # 型番（コレクション番号）の抽出
+    col_match = re.search(r'(\d{2,4}/\d{2,4})', orig_name_clean)
+    orig_col_num = col_match.group(1) if col_match else ""
     
     def extract_rarities(text):
         found = []
@@ -550,31 +555,47 @@ def get_best_match(orig_name, orig_pack, results, item_type=""):
         
         score = 0
         
-        clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', orig_name_clean).strip()
-        clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', res_name).strip()
+        # 🚨【絶対条件1】型番が指定されている場合、検索結果にそれが含まれなければ即除外
+        if orig_col_num:
+            if orig_col_num not in res_name:
+                continue
+            else:
+                score += 200 # 型番一致は超高得点
+
+        # 🚨【絶対条件2】パック名（略号）の厳格チェック
+        res_pack = res.get('pack', '').upper()
+        if orig_pack_clean and res_pack:
+            if orig_pack_clean != res_pack:
+                continue # パック略号が違うものは別のカードなので即除外
+            else:
+                score += 50
+        elif orig_pack_clean and not res_pack:
+            score -= 10 # 相手にパック情報がない場合は少し減点して様子見
+        
+        # 名前の一致度
+        clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}', '', orig_name_clean).strip()
+        clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}', '', res_name).strip()
         base_score = difflib.SequenceMatcher(None, clean_orig, clean_res).ratio() * 100
         score += base_score
         
-        res_pack = res.get('pack', '').upper()
-        if orig_pack_clean and res_pack:
-            if orig_pack_clean == res_pack: score += 30
-            else: score -= 10
-        elif orig_pack_clean and not res_pack: score -= 5
-            
+        # レアリティの照合
         if is_single:
             res_r = extract_rarities(res_name)
             if orig_r:
-                if any(r in res_r for r in orig_r): score += 50
-                else: score -= 100 
+                if any(r in res_r for r in orig_r): 
+                    score += 50
+                else: 
+                    continue # 指定レアリティが含まれていない場合は即除外
             else:
                 if res_r: score -= 100 
                     
         res['final_score'] = score
-        if score > 20:
+        if score > 0: # 絶対条件で足切りしているため、ここは緩めてOK
             valid_results.append(res)
             
     if not valid_results: return None
     
+    # 同点の場合は価格が安い方(実勢価格の底値)を優先
     valid_results.sort(key=lambda x: (-x['final_score'], x['price']))
     return valid_results[0]
 
@@ -635,10 +656,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.16)
+# 🖥️ アプリ画面 (v5.17)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.16")
+st.title("🎴 ぽっけぇ～道 管理システム v5.17")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -1019,7 +1040,7 @@ elif menu == "📊 在庫・PSA管理":
         with tab_maint:
             st.subheader("🛠️ メンテナンス")
             with st.container(border=True):
-                st.markdown("#### 🌐 最新相場の一括取得・更新 (投網＆スナイパー完全版)")
+                st.markdown("#### 🌐 最新相場の一括取得・更新 (究極スナイパー版)")
                 if st.button("🔄 自動更新ONのカードの相場を最新にする", use_container_width=True):
                     df_inv_maint = load_data()
                     items_to_update = df_inv_maint[(df_inv_maint['相場更新'] == True) & (df_inv_maint['ステータス'] != '売却済み')]
@@ -1035,7 +1056,7 @@ elif menu == "📊 在庫・PSA管理":
                         for i, (_, row) in enumerate(unique_queries.iterrows()):
                             orig_name, orig_pack, item_type = row['商品名'], row['収録パック'], row['種類']
                             
-                            # ✨v5.16 投網検索用のクリーンなキーワードを生成
+                            # ✨v5.17 型番付きのクリーンなキーワードを生成して検索
                             search_kw = generate_search_keyword(orig_name)
                             progress_text.text(f"🔍 検索中: {search_kw} ({i+1}/{total_items})")
                             time.sleep(1.0)
