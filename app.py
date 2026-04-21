@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.15)
+# ⚙️ 設定・定数 (v5.15.1)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -184,7 +184,13 @@ def load_data():
             if header[13] != '重量': updates.append(gspread.Cell(row=1, col=14, value='重量'))
             if header[14] != '個別メモ': updates.append(gspread.Cell(row=1, col=15, value='個別メモ'))
             if header[15] != '商品URL': updates.append(gspread.Cell(row=1, col=16, value='商品URL'))
-            if updates: ws_inv.update_cells(updates)
+            if updates: 
+                try:
+                    ws_inv.update_cells(updates)
+                except Exception:
+                    # ✨修正ポイント✨ 既存シートの列数制限(15列等)に引っかかった場合、自動で列を拡張してリトライする
+                    ws_inv.add_cols(5)
+                    ws_inv.update_cells(updates)
 
             df = get_as_dataframe(ws_inv, evaluate_formulas=True)
             df = df.dropna(subset=['ID'])
@@ -200,7 +206,8 @@ def load_data():
             for c in ['原価', '参考相場', '在庫数']:
                 df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int)
             return df
-        except Exception: return pd.DataFrame()
+        except Exception: 
+            return pd.DataFrame()
     return pd.DataFrame()
 
 def save_data(df):
@@ -502,7 +509,6 @@ def generate_search_keyword(orig_name):
     if is_box and "BOX" not in cleaned.upper(): cleaned += " BOX"
     return cleaned.strip() if cleaned else orig_name.strip()
 
-# ✨ v5.15 超高精度判定アルゴリズム搭載 ✨
 def get_best_match(orig_name, orig_pack, results):
     ng_words = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット"]
     rarities = ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
@@ -591,10 +597,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.15)
+# 🖥️ アプリ画面 (v5.15.1)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.15")
+st.title("🎴 ぽっけぇ～道 管理システム v5.15.1")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -741,7 +747,7 @@ if menu == "📦 スピード仕入・解体":
                             df_inv.at[idx, '在庫数'] = old_q + qty
                             df_inv.at[idx, '原価'] = int((old_q * old_c + qty * cost) / (old_q + qty))
                             df_inv.at[idx, '仕入日'] = p_date
-                            df_inv.at[idx, '相場更新'] = row['相場更新'] # 設定を上書き更新
+                            df_inv.at[idx, '相場更新'] = row['相場更新']
                             if row['商品URL']: df_inv.at[idx, '商品URL'] = row['商品URL']
                         else:
                             new_rows.append({'ID': row['ID'], '商品名': row['商品名'], '収録パック': row['収録パック'], '種類': row['種類'], '状態_PSA': row['状態'], '仕入日': p_date, '原価': cost, '参考相場': row['参考相場'], '在庫数': qty, '仕入元': purchase_source, 'ステータス': '在庫あり', 'PSA番号': '', '相場更新': row['相場更新'], '重量': '', '個別メモ': '', '商品URL': row['商品URL']})
