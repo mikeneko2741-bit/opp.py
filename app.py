@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.19)
+# ⚙️ 設定・定数 (v5.20)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -169,7 +169,7 @@ def check_and_init_sheets():
         ws_sales.append_row(['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
     try: ws_cart = sh.worksheet(SHEET_CART)
     except:
-        ws_cart = sh.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
+        ws_cart = st.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
         ws_cart.append_row(['SessionID', 'Timestamp', 'CartJSON'])
     return ws_inv, ws_pur, ws_sales, ws_cart
 
@@ -502,89 +502,57 @@ def clean_product_name(text):
 def generate_search_keyword(orig_name):
     is_box = "BOX" in orig_name.upper() or "ｂｏｘ" in orig_name.lower()
     cleaned = str(orig_name)
-    
     col_match = re.search(r'(\d{2,4}/\d{2,4})', cleaned)
     col_number = col_match.group(1) if col_match else ""
-    
     remove_words = ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]
-    for w in remove_words:
-        cleaned = cleaned.replace(w, "")
-        
+    for w in remove_words: cleaned = cleaned.replace(w, "")
     cleaned = re.sub(r'【.*?】|\[.*?\]|\(.*?\)|\{.*?\}', ' ', cleaned)
     cleaned = cleaned.replace('「', ' ').replace('」', ' ').replace('『', ' ').replace('』', ' ')
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    
-    if is_box and "BOX" not in cleaned.upper(): 
-        cleaned += " BOX"
-        
-    if col_number and not is_box:
-        cleaned += f" {col_number}"
-        
+    if is_box and "BOX" not in cleaned.upper(): cleaned += " BOX"
+    if col_number and not is_box: cleaned += f" {col_number}"
     return cleaned.strip() if cleaned.strip() else orig_name.strip()
 
 def get_best_match(orig_name, orig_pack, results, item_type=""):
     ng_words = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱"]
     rarities = ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
-    
-    orig_name_clean = orig_name.strip().upper()
-    orig_pack_clean = orig_pack.strip().upper() if orig_pack else ""
-    
+    orig_name_clean, orig_pack_clean = orig_name.strip().upper(), (orig_pack.strip().upper() if orig_pack else "")
     col_match = re.search(r'(\d{2,4}/\d{2,4})', orig_name_clean)
     orig_col_num = col_match.group(1) if col_match else ""
-    
     def extract_rarities(text):
         found = []
         for r in rarities:
-            if re.search(rf'(?<![A-Z]){r}(?![A-Z])', text):
-                found.append(r)
+            if re.search(rf'(?<![A-Z]){r}(?![A-Z])', text): found.append(r)
         return found
-
     orig_r = extract_rarities(orig_name_clean)
     is_single = ("シングル" in item_type) or (item_type == "")
-
     valid_results = []
     for res in results:
         res_name = res['name'].upper()
         if any(ng in res_name for ng in ng_words): continue
-        
         score = 0
-        
         if orig_col_num:
-            if orig_col_num not in res_name:
-                continue
-            else:
-                score += 200 
-
+            if orig_col_num not in res_name: continue
+            else: score += 200 
         res_pack = res.get('pack', '').upper()
         if orig_pack_clean and res_pack:
-            if orig_pack_clean != res_pack:
-                continue 
-            else:
-                score += 50
-        elif orig_pack_clean and not res_pack:
-            score -= 10 
-        
+            if orig_pack_clean != res_pack: continue 
+            else: score += 50
+        elif orig_pack_clean and not res_pack: score -= 10 
         clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}', '', orig_name_clean).strip()
         clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}', '', res_name).strip()
         base_score = difflib.SequenceMatcher(None, clean_orig, clean_res).ratio() * 100
         score += base_score
-        
         if is_single:
             res_r = extract_rarities(res_name)
             if orig_r:
-                if any(r in res_r for r in orig_r): 
-                    score += 50
-                else: 
-                    continue 
+                if any(r in res_r for r in orig_r): score += 50
+                else: continue 
             else:
                 if res_r: score -= 100 
-                    
         res['final_score'] = score
-        if score > 0: 
-            valid_results.append(res)
-            
+        if score > 0: valid_results.append(res)
     if not valid_results: return None
-    
     valid_results.sort(key=lambda x: (-x['final_score'], x['price']))
     return valid_results[0]
 
@@ -621,16 +589,13 @@ def fetch_from_url(url):
                     if any(bad in temp_url.lower() for bad in ["spacer", "blank", "icon", "ranking", "mark", "sold"]): continue
                     img_url = temp_url; break
             if img_url.startswith('/'): img_url = "https://www.cardrush-pokemon.jp" + img_url
-            
             product_url = ""
             for a_tag in item.select('a[href]'):
                 href_val = a_tag['href']
                 if "javascript" not in href_val.lower() and href_val != "#":
                     product_url = href_val
-                    if product_url.startswith('/'): 
-                        product_url = "https://www.cardrush-pokemon.jp" + product_url
+                    if product_url.startswith('/'): product_url = "https://www.cardrush-pokemon.jp" + product_url
                     break
-            
             if price > 0: results.append({"name": clean_name, "pack": pack_code, "price": price, "image": img_url, "url": product_url})
         unique = []
         seen = set()
@@ -650,10 +615,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.19)
+# 🖥️ アプリ画面 (v5.20)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.19")
+st.title("🎴 ぽっけぇ～道 管理システム v5.20")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -742,7 +707,6 @@ if menu == "📦 スピード仕入・解体":
     with col_right:
         total_cart_qty = sum(item['qty'] for item in st.session_state['cart'])
         st.subheader(f"② カートの中身と原価計算 (計 {total_cart_qty} 点)")
-        
         c_save, c_load = st.columns(2)
         with c_save:
             if st.button("💾 下書き保存", use_container_width=True):
@@ -752,14 +716,12 @@ if menu == "📦 スピード仕入・解体":
             if st.button("📥 復元", use_container_width=True):
                 draft = load_cart_draft(st.session_state['session_id'])
                 if draft: st.session_state['cart'] = draft; st.rerun()
-
         rk = st.session_state['reset_key']
         with st.container(border=True):
             total_paid = st.number_input("支払総額", min_value=0, step=1000, key=f"total_paid_{rk}")
             purchase_title = st.text_input("仕入名目", key=f"title_{rk}")
             purchase_source = st.selectbox("仕入先", ["店舗", "フリマ", "オンラインオリパ", "問屋", "自己所有", "その他"], key=f"source_{rk}")
             is_individual = st.checkbox("✅ 個別管理する（細胞分裂）", value=True)
-            
         if not st.session_state['cart']: st.caption("カートは空です")
         else:
             total_mkt = sum(item['qty'] * item['market_price'] for item in st.session_state['cart'])
@@ -770,17 +732,7 @@ if menu == "📦 スピード仕入・解体":
                     item['unit_cost'] = int((total_paid * (item_mkt / total_mkt)) / item['qty']) if total_mkt > 0 else 0
                 calc_cart.append({"削除": False, "ID": item['id'], "商品名": item['name'], "収録パック": item.get('pack', ''), "状態": item['cond'], "種類": item['type'], "数量": item['qty'], "原価": item['unit_cost'], "参考相場": item['market_price'], "相場更新": item['auto_update'], "商品URL": item.get('url', '')})
             st.session_state['prev_total_paid'] = total_paid
-            
-            edited_cart = st.data_editor(
-                pd.DataFrame(calc_cart), 
-                hide_index=True, 
-                key=f"cart_ed_{rk}", 
-                use_container_width=True,
-                column_config={
-                    "相場更新": st.column_config.CheckboxColumn("相場更新", help="チェックを入れると定期的に相場を自動取得します")
-                }
-            )
-            
+            edited_cart = st.data_editor(pd.DataFrame(calc_cart), hide_index=True, key=f"cart_ed_{rk}", use_container_width=True, column_config={"相場更新": st.column_config.CheckboxColumn("相場更新")})
             if st.button("✨ 一括登録 ✨", type="primary", use_container_width=True):
                 df_inv = load_data()
                 batch_id, p_date = "B" + uuid.uuid4().hex[:8], datetime.now().strftime('%Y-%m-%d')
@@ -797,10 +749,7 @@ if menu == "📦 スピード仕入・解体":
                         if not df_inv.empty and mask.any():
                             idx = df_inv[mask].index[0]
                             old_q, old_c = int(df_inv.at[idx, '在庫数']), int(df_inv.at[idx, '原価'])
-                            df_inv.at[idx, '在庫数'] = old_q + qty
-                            df_inv.at[idx, '原価'] = int((old_q * old_c + qty * cost) / (old_q + qty))
-                            df_inv.at[idx, '仕入日'] = p_date
-                            df_inv.at[idx, '相場更新'] = row['相場更新']
+                            df_inv.at[idx, '在庫数'], df_inv.at[idx, '原価'], df_inv.at[idx, '仕入日'], df_inv.at[idx, '相場更新'] = old_q + qty, int((old_q * old_c + qty * cost) / (old_q + qty)), p_date, row['相場更新']
                             if row['商品URL']: df_inv.at[idx, '商品URL'] = row['商品URL']
                         else:
                             new_rows.append({'ID': row['ID'], '商品名': row['商品名'], '収録パック': row['収録パック'], '種類': row['種類'], '状態_PSA': row['状態'], '仕入日': p_date, '原価': cost, '参考相場': row['参考相場'], '在庫数': qty, '仕入元': purchase_source, 'ステータス': '在庫あり', 'PSA番号': '', '相場更新': row['相場更新'], '重量': '', '個別メモ': '', '商品URL': row['商品URL']})
@@ -818,87 +767,37 @@ elif menu == "📊 在庫・PSA管理":
     if df.empty: st.info("在庫がありません")
     else:
         df_active = df[df['ステータス'] != '売却済み'].copy()
-        
-        # ✨ v5.19 タブに「種類別サマリー」を追加 ✨
         tab_singles, tab_box, tab_summary, tab_psa, tab_sell, tab_edit, tab_maint = st.tabs(["🃏 シングル", "📦 BOX・素材", "📋 種類別サマリー", "💎 PSA管理", "🛒 売却レジ", "✏️ 編集", "🛠️ メンテ"])
-        
         with tab_singles:
             df_s = df_active[(df_active['種類'] == 'シングルカード') & (~df_active['ステータス'].isin(['PSA提出中', '鑑定済み']))]
-            st.dataframe(
-                df_s[['商品URL', '商品名', '収録パック', '状態_PSA', '原価', '参考相場', '在庫数', '仕入日', '個別メモ']], 
-                hide_index=True, 
-                use_container_width=True,
-                column_config={
-                    "商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")
-                }
-            )
+            st.dataframe(df_s[['商品URL', '商品名', '収録パック', '状態_PSA', '原価', '参考相場', '在庫数', '仕入日', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
             st.divider()
             target = st.selectbox("PSA提出するカードを選択", options=df_s['ID'].tolist(), format_func=lambda x: f"{df_s[df_s['ID']==x].iloc[0]['商品名']} (ID:{x})", index=None)
             if target and st.button("✈️ PSA提出中にする"):
                 df.loc[df['ID'] == target, 'ステータス'] = 'PSA提出中'
                 save_data(df); st.success("変更完了"); st.rerun()
-
         with tab_box:
             df_b = df_active[df_active['種類'].isin(['未開封BOX', '素材・バルク', 'オリジナルパック', '未開封パック'])]
-            st.dataframe(
-                df_b[['商品URL', '商品名', '種類', '原価', '在庫数', '参考相場', '重量', '個別メモ']], 
-                hide_index=True, 
-                use_container_width=True,
-                column_config={
-                    "商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")
-                }
-            )
+            st.dataframe(df_b[['商品URL', '商品名', '種類', '原価', '在庫数', '参考相場', '重量', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
 
-        # ✨ v5.19 種類別サマリー（総在庫のおまとめ表示） ✨
         with tab_summary:
             st.markdown("#### 📋 種類別サマリー (同じカード・BOXのおまとめ表示)")
-            st.caption("※ここは確認専用の画面です。細胞分裂でバラバラに管理している在庫の「合計数」と「平均原価」がひと目でわかります。")
-            if df_active.empty:
-                st.info("集計する在庫がありません。")
+            st.caption("※細胞分裂でバラバラに管理している在庫の「合計数」と「平均原価」がひと目でわかります。")
+            if df_active.empty: st.info("集計する在庫がありません。")
             else:
-                # 合計金額計算用の列を一時的に作成
                 df_sum_temp = df_active.copy()
                 df_sum_temp['行原価合計'] = df_sum_temp['原価'] * df_sum_temp['在庫数']
-
-                # 商品名、パック、状態、種類でグループ化して集計
-                summary_df = df_sum_temp.groupby(['種類', '商品名', '収録パック', '状態_PSA']).agg(
-                    総在庫数=('在庫数', 'sum'),
-                    総原価=('行原価合計', 'sum'),
-                    参考相場=('参考相場', 'max'),
-                    商品URL=('商品URL', 'first')
-                ).reset_index()
-
-                # 平均原価の計算
+                # ✨ v5.20 修正ポイント: dropna=False を指定し、パック名が空のBOX等も除外せず表示する ✨
+                summary_df = df_sum_temp.groupby(['種類', '商品名', '収録パック', '状態_PSA'], dropna=False).agg(総在庫数=('在庫数', 'sum'), 総原価=('行原価合計', 'sum'), 参考相場=('参考相場', 'max'), 商品URL=('商品URL', 'first')).reset_index()
                 summary_df['平均原価'] = (summary_df['総原価'] / summary_df['総在庫数']).fillna(0).astype(int)
-                summary_df['総原価'] = summary_df['総原価'].astype(int)
-
-                # 表示用に列を整理
                 display_summary = summary_df[['種類', '商品URL', '商品名', '収録パック', '状態_PSA', '総在庫数', '平均原価', '総原価', '参考相場']]
-
-                st.dataframe(
-                    display_summary,
-                    hide_index=True,
-                    use_container_width=True,
-                    column_config={
-                        "商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く"),
-                        "平均原価": st.column_config.NumberColumn("平均原価", format="¥%d"),
-                        "総原価": st.column_config.NumberColumn("総原価", format="¥%d"),
-                        "参考相場": st.column_config.NumberColumn("参考相場", format="¥%d"),
-                        "総在庫数": st.column_config.NumberColumn("総在庫数", format="%d 点")
-                    }
-                )
+                st.dataframe(display_summary, hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く"), "平均原価": st.column_config.NumberColumn("平均原価", format="¥%d"), "総原価": st.column_config.NumberColumn("総原価", format="¥%d"), "参考相場": st.column_config.NumberColumn("参考相場", format="¥%d"), "総在庫数": st.column_config.NumberColumn("総在庫数", format="%d 点")})
 
         with tab_psa:
             c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("##### ⏳ 提出中")
-                st.dataframe(df_active[df_active['ステータス']=='PSA提出中'][['商品名', '在庫数', '原価']], hide_index=True)
-            with c2:
-                st.markdown("##### ✨ 鑑定済み")
-                st.dataframe(df_active[df_active['ステータス']=='鑑定済み'][['商品名', '状態_PSA', 'PSA番号', '原価']], hide_index=True)
-            st.divider()
-            st.markdown("##### 📥 鑑定結果の登録")
-            psa_p = df_active[df_active['ステータス']=='PSA提出中']
+            with c1: st.markdown("##### ⏳ 提出中"); st.dataframe(df_active[df_active['ステータス']=='PSA提出中'][['商品名', '在庫数', '原価']], hide_index=True)
+            with c2: st.markdown("##### ✨ 鑑定済み"); st.dataframe(df_active[df_active['ステータス']=='鑑定済み'][['商品名', '状態_PSA', 'PSA番号', '原価']], hide_index=True)
+            st.divider(); st.markdown("##### 📥 鑑定結果の登録"); psa_p = df_active[df_active['ステータス']=='PSA提出中']
             if not psa_p.empty:
                 with st.form("psa_res"):
                     tid = st.selectbox("カード選択", options=psa_p['ID'].tolist(), format_func=lambda x: f"{psa_p[psa_p['ID']==x].iloc[0]['商品名']} (ID:{x})")
@@ -907,166 +806,75 @@ elif menu == "📊 在庫・PSA管理":
                     with cc2: cert = st.text_input("PSA番号")
                     with cc3: fee = st.number_input("鑑定料", value=3300)
                     if st.form_submit_button("登録"):
-                        df = load_data()
-                        trow = df[df['ID'] == tid].iloc[0]
-                        new_cost = int(trow['原価']) + fee
+                        df = load_data(); trow = df[df['ID'] == tid].iloc[0]; new_cost = int(trow['原価']) + fee
                         if int(trow['在庫数']) > 1:
                             df.loc[df['ID'] == tid, '在庫数'] = int(trow['在庫数']) - 1
-                            new_r = trow.copy()
-                            new_r['ID'], new_r['在庫数'], new_r['ステータス'], new_r['状態_PSA'], new_r['PSA番号'], new_r['原価'] = "I"+uuid.uuid4().hex[:8], 1, '鑑定済み', f"PSA {gr}", cert, new_cost
+                            new_r = trow.copy(); new_r['ID'], new_r['在庫数'], new_r['ステータス'], new_r['状態_PSA'], new_r['PSA番号'], new_r['原価'] = "I"+uuid.uuid4().hex[:8], 1, '鑑定済み', f"PSA {gr}", cert, new_cost
                             df = pd.concat([df, pd.DataFrame([new_r])], ignore_index=True)
-                        else:
-                            df.loc[df['ID'] == tid, 'ステータス'], df.loc[df['ID'] == tid, '状態_PSA'], df.loc[df['ID'] == tid, 'PSA番号'], df.loc[df['ID'] == tid, '原価'] = '鑑定済み', f"PSA {gr}", cert, new_cost
-                        save_data(df)
-                        df_s = load_sales_data()
-                        df_s = pd.concat([df_s, pd.DataFrame([{'ID': "S"+uuid.uuid4().hex[:8], '元の在庫ID': tid, '売却日': datetime.now().strftime('%Y-%m-%d'), '商品名': trow['商品名'], '収録パック': trow['収録パック'], '状態_PSA': trow['状態_PSA'], '売却数': 1, '売上額': 0, '手数料': 0, '経費_送料': 0, '純利益': 0, '販路': 'システム：PSA移行', '備考': 'PSA登録による自動処理', '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}])], ignore_index=True)
-                        save_sales_data(df_s)
-                        st.success("登録完了"); time.sleep(1); st.rerun()
+                        else: df.loc[df['ID'] == tid, 'ステータス'], df.loc[df['ID'] == tid, '状態_PSA'], df.loc[df['ID'] == tid, 'PSA番号'], df.loc[df['ID'] == tid, '原価'] = '鑑定済み', f"PSA {gr}", cert, new_cost
+                        save_data(df); df_s = load_sales_data(); df_s = pd.concat([df_s, pd.DataFrame([{'ID': "S"+uuid.uuid4().hex[:8], '元の在庫ID': tid, '売却日': datetime.now().strftime('%Y-%m-%d'), '商品名': trow['商品名'], '収録パック': trow['収録パック'], '状態_PSA': trow['状態_PSA'], '売却数': 1, '売上額': 0, '手数料': 0, '経費_送料': 0, '純利益': 0, '販路': 'システム：PSA移行', '備考': 'PSA登録による自動処理', '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}])], ignore_index=True)
+                        save_sales_data(df_s); st.success("登録完了"); time.sleep(1); st.rerun()
 
         with tab_sell:
             st.subheader("🛒 売却レジ (まとめ買いスキャン対応)")
             c_left, c_right = st.columns([1.2, 1])
-            
             with c_left:
                 scan_mode = st.radio("スキャン方法", ["🔫 物理スキャナー", "📱 スマホ/iPad内蔵カメラ"], horizontal=True)
-                target_sell_id = None
-                active_ids = {f"[{r['収録パック']}] {r['商品名']} ({r['状態_PSA']} | 残:{r['在庫数']}) [ID:{r['ID']}]": r['ID'] for _, r in df_active[df_active['在庫数'] > 0].iterrows()}
-                existing_cart_ids = [item['id'] for item in st.session_state['sell_cart']]
-                
+                target_sell_id, active_ids, existing_cart_ids = None, {f"[{r['収録パック']}] {r['商品名']} ({r['状態_PSA']} | 残:{r['在庫数']}) [ID:{r['ID']}]": r['ID'] for _, r in df_active[df_active['在庫数'] > 0].iterrows()}, [item['id'] for item in st.session_state['sell_cart']]
                 if scan_mode == "🔫 物理スキャナー":
                     st.text_input("📷 スキャンしてカートに追加", key="phys_scan_val_sell", on_change=cb_phys_sell)
                     target_sell_id = st.session_state.pop('phys_scan_pend_sell', None)
                 else:
                     cam_res = _scanner(scanned_ids=existing_cart_ids, valid_ids=list(active_ids.values()), key="cam_sell")
                     if cam_res and isinstance(cam_res, dict):
-                        if cam_res['ts'] != st.session_state.get('last_cam_ts_sell'):
-                            st.session_state['last_cam_ts_sell'] = cam_res['ts']
-                            target_sell_id = cam_res['id']
-
+                        if cam_res['ts'] != st.session_state.get('last_cam_ts_sell'): st.session_state['last_cam_ts_sell'], target_sell_id = cam_res['ts'], cam_res['id']
                 manual_sell = st.selectbox("手動で選んで追加", options=[""] + list(active_ids.keys()), index=0)
                 if manual_sell != "": target_sell_id = active_ids[manual_sell]
-
                 if target_sell_id:
                     if target_sell_id in active_ids.values():
                         if target_sell_id not in existing_cart_ids:
                             trow = df_active[df_active['ID'] == target_sell_id].iloc[0]
-                            def_price = int(trow['参考相場']) if int(trow['参考相場']) > 0 else int(trow['原価'])
-                            st.session_state['sell_cart'].append({
-                                '削除': False, 'id': target_sell_id, 'name': trow['商品名'], 'pack': trow['収録パック'], 
-                                'cond': trow['状態_PSA'], 'cost': int(trow['原価']), 
-                                'sell_price': def_price, 'qty': 1, 'max_qty': int(trow['在庫数'])
-                            })
-                            st.toast(f"✅ レジに追加しました: {trow['商品名']}", icon="🛒")
-                        else:
-                            st.toast("⚠️ すでにレジに入っています。数量を変更してください。", icon="⚠️")
-                    else:
-                        st.toast("❌ 在庫が見つかりません。", icon="❌")
+                            st.session_state['sell_cart'].append({'削除': False, 'id': target_sell_id, 'name': trow['商品名'], 'pack': trow['収録パック'], 'cond': trow['状態_PSA'], 'cost': int(trow['原価']), 'sell_price': (int(trow['参考相場']) if int(trow['参考相場']) > 0 else int(trow['原価'])), 'qty': 1, 'max_qty': int(trow['在庫数'])})
+                            st.toast(f"✅ レジに追加: {trow['商品名']}", icon="🛒")
+                        else: st.toast("⚠️ すでにレジに入っています", icon="⚠️")
+                    else: st.toast("❌ 在庫不明", icon="❌")
                     st.rerun()
-
                 st.write("---")
-                if not st.session_state['sell_cart']:
-                    st.info("商品をスキャンするか、リストから選んでレジに追加してください。")
+                if not st.session_state['sell_cart']: st.info("商品をスキャンするかリストから選択してください。")
                 else:
-                    total_sell_qty = sum(item['qty'] for item in st.session_state['sell_cart'])
-                    st.markdown(f"#### 🛍️ お会計カート (計 {total_sell_qty} 点)")
-                    
-                    df_sell_cart = pd.DataFrame(st.session_state['sell_cart'])
-                    edited_sell = st.data_editor(
-                        df_sell_cart[['削除', 'name', 'cond', 'sell_price', 'qty', 'id']],
-                        hide_index=True,
-                        column_config={
-                            "削除": st.column_config.CheckboxColumn("外す", default=False, width="small"),
-                            "name": st.column_config.TextColumn("商品名", disabled=True),
-                            "cond": st.column_config.TextColumn("状態", disabled=True, width="small"),
-                            "sell_price": st.column_config.NumberColumn("売値(手入力可)", min_value=0, step=100, format="¥%d"),
-                            "qty": st.column_config.NumberColumn("売却数", min_value=1, step=1, width="small"),
-                            "id": None
-                        }, use_container_width=True
-                    )
-                    
+                    st.markdown(f"#### 🛍️ カート (計 {sum(item['qty'] for item in st.session_state['sell_cart'])} 点)")
+                    edited_sell = st.data_editor(pd.DataFrame(st.session_state['sell_cart'])[['削除', 'name', 'cond', 'sell_price', 'qty', 'id']], hide_index=True, use_container_width=True, column_config={"削除": st.column_config.CheckboxColumn("外す", width="small"), "name": st.column_config.TextColumn("商品名", disabled=True), "cond": st.column_config.TextColumn("状態", disabled=True), "sell_price": st.column_config.NumberColumn("売値", format="¥%d"), "qty": st.column_config.NumberColumn("数", min_value=1), "id": None})
                     needs_rerun = False
                     for idx, row in edited_sell.iterrows():
                         for item in st.session_state['sell_cart']:
                             if item['id'] == row['id']:
-                                act_qty = row['qty'] if row['qty'] <= item['max_qty'] else item['max_qty']
-                                if item['sell_price'] != row['sell_price'] or item['qty'] != act_qty:
-                                    item['sell_price'] = row['sell_price']
-                                    item['qty'] = act_qty
-                                    needs_rerun = True
+                                act_qty = (row['qty'] if row['qty'] <= item['max_qty'] else item['max_qty'])
+                                if item['sell_price'] != row['sell_price'] or item['qty'] != act_qty: item['sell_price'], item['qty'], needs_rerun = row['sell_price'], act_qty, True
                     if needs_rerun: st.rerun()
-                    
                     if edited_sell['削除'].any():
-                        if st.button("🗑️ チェックした商品を外す"):
-                            keep_ids = edited_sell[~edited_sell['削除']]['id'].tolist()
-                            st.session_state['sell_cart'] = [i for i in st.session_state['sell_cart'] if i['id'] in keep_ids]
-                            st.rerun()
-
+                        if st.button("🗑️ チェックした商品を外す"): st.session_state['sell_cart'] = [i for i in st.session_state['sell_cart'] if i['id'] in edited_sell[~edited_sell['削除']]['id'].tolist()]; st.rerun()
             with c_right:
-                if st.button("🗑️ カートとスキャン履歴をクリア", use_container_width=True):
-                    st.session_state['sell_cart'] = []
-                    st.rerun()
-                
+                if st.button("🗑️ 履歴クリア", use_container_width=True): st.session_state['sell_cart'] = []; st.rerun()
                 with st.container(border=True):
-                    if not st.session_state['sell_cart']:
-                        st.write("カートは空です")
+                    if not st.session_state['sell_cart']: st.write("空")
                     else:
-                        total_sales = sum(item['sell_price'] * item['qty'] for item in st.session_state['sell_cart'])
-                        total_cost = sum(item['cost'] * item['qty'] for item in st.session_state['sell_cart'])
-                        total_sell_qty = sum(item['qty'] for item in st.session_state['sell_cart'])
-                        
-                        st.markdown(f"### 💰 売上合計: ¥{total_sales:,}")
-                        st.write(f"🛒 お買い上げ点数: **{total_sell_qty} 点**")
-                        st.caption(f"原価合計: ¥{total_cost:,}")
-                        
-                        ch = st.selectbox("販路", ["BASE (Web)", "BASE (PayID)", "メルカリ", "店舗・直接", "その他"])
-                        sc = st.number_input("送料・梱包費 (全体)", min_value=0, value=185 if "店舗" not in ch else 0)
-                        note = st.text_input("全体メモ (レシート共通)")
-                        
-                        if st.button("✨ 一括で会計を確定 ✨", type="primary", use_container_width=True):
-                            df_inv_s = load_data()
-                            df_sales_s = load_sales_data()
-                            receipt_id = "R" + uuid.uuid4().hex[:8]
-                            sales_records = []
-                            
+                        t_sales, t_qty = sum(item['sell_price'] * item['qty'] for item in st.session_state['sell_cart']), sum(item['qty'] for item in st.session_state['sell_cart'])
+                        st.markdown(f"### 💰 合計: ¥{t_sales:,}"); st.write(f"🛒 {t_qty} 点"); ch = st.selectbox("販路", ["BASE (Web)", "BASE (PayID)", "メルカリ", "店舗・直接", "その他"]); sc = st.number_input("送料等", value=185 if "店舗" not in ch else 0); note = st.text_input("全体メモ")
+                        if st.button("✨ 会計確定 ✨", type="primary", use_container_width=True):
+                            df_inv_s, df_sales_s, receipt_id, sales_records = load_data(), load_sales_data(), "R"+uuid.uuid4().hex[:8], []
                             for item in st.session_state['sell_cart']:
-                                s_price = item['sell_price'] * item['qty']
-                                fee = int(s_price * 0.066 + 40) if "Web" in ch else int(s_price * 0.095 + 40) if "PayID" in ch else int(s_price * 0.1) if "メルカリ" in ch else 0
-                                prorated_sc = int(sc * (s_price / total_sales)) if total_sales > 0 else int(sc / len(st.session_state['sell_cart']))
-                                profit = s_price - fee - prorated_sc - (item['cost'] * item['qty'])
-                                
+                                s_p = item['sell_price'] * item['qty']; fee = (int(s_p * 0.066 + 40) if "Web" in ch else int(s_p * 0.095 + 40) if "PayID" in ch else int(s_p * 0.1) if "メルカリ" in ch else 0); p_sc = (int(sc * (s_p / t_sales)) if t_sales > 0 else 0)
                                 new_q = int(df_inv_s.loc[df_inv_s['ID'] == item['id'], '在庫数'].values[0]) - item['qty']
                                 df_inv_s.loc[df_inv_s['ID'] == item['id'], '在庫数'] = new_q
                                 if new_q <= 0: df_inv_s.loc[df_inv_s['ID'] == item['id'], 'ステータス'] = '売却済み'
-                                
-                                sales_records.append({
-                                    'ID': "S"+uuid.uuid4().hex[:8], '元の在庫ID': item['id'], '売却日': datetime.now().strftime('%Y-%m-%d'), 
-                                    '商品名': item['name'], '収録パック': item['pack'], '状態_PSA': item['cond'], 
-                                    '売却数': item['qty'], '売上額': s_price, '手数料': fee, '経費_送料': prorated_sc, 
-                                    '純利益': profit, '販路': ch, '備考': f"{note} [明細:{receipt_id}]".strip(), 
-                                    '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                })
-                                
-                            save_data(df_inv_s)
-                            save_sales_data(pd.concat([df_sales_s, pd.DataFrame(sales_records)], ignore_index=True))
-                            
-                            st.session_state['sell_cart'] = []
-                            st.success(f"🎉 お会計完了！ (レシート番号: {receipt_id})"); time.sleep(2); st.rerun()
+                                sales_records.append({'ID': "S"+uuid.uuid4().hex[:8], '元の在庫ID': item['id'], '売却日': datetime.now().strftime('%Y-%m-%d'), '商品名': item['name'], '収録パック': item['pack'], '状態_PSA': item['cond'], '売却数': item['qty'], '売上額': s_p, '手数料': fee, '経費_送料': p_sc, '純利益': s_p - fee - p_sc - (item['cost'] * item['qty']), '販路': ch, '備考': f"{note} [{receipt_id}]".strip(), '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
+                            save_data(df_inv_s); save_sales_data(pd.concat([df_sales_s, pd.DataFrame(sales_records)], ignore_index=True)); st.session_state['sell_cart'] = []; st.success(f"🎉 完了 [{receipt_id}]"); time.sleep(2); st.rerun()
 
         with tab_edit:
             df_edit = df.copy(); df_edit['削除'] = False
-            ed = st.data_editor(
-                df_edit[['削除', '商品名', '収録パック', '種類', '状態_PSA', '相場更新', '重量', '個別メモ', '在庫数', '原価', 'ステータス', 'ID', '商品URL']], 
-                hide_index=True, 
-                use_container_width=True,
-                column_config={
-                    "相場更新": st.column_config.CheckboxColumn("自動更新"),
-                    "商品URL": st.column_config.LinkColumn("商品URL")
-                }
-            )
+            ed = st.data_editor(df_edit[['削除', '商品名', '収録パック', '種類', '状態_PSA', '相場更新', '重量', '個別メモ', '在庫数', '原価', 'ステータス', 'ID', '商品URL']], hide_index=True, use_container_width=True, column_config={"相場更新": st.column_config.CheckboxColumn("自動更新"), "商品URL": st.column_config.LinkColumn("商品URL")})
             if st.button("💾 変更を保存", type="primary"):
-                df_s = load_data()
-                keep_ids = ed[~ed['削除']]['ID'].tolist()
-                df_s = df_s[df_s['ID'].isin(keep_ids)].copy()
+                df_s = load_data(); keep_ids = ed[~ed['削除']]['ID'].tolist(); df_s = df_s[df_s['ID'].isin(keep_ids)].copy()
                 for _, r in ed.iterrows():
                     if not r['削除']:
                         for col in ['商品名', '収録パック', '状態_PSA', '相場更新', '重量', '個別メモ', '在庫数', '原価', 'ステータス', '商品URL']: df_s.loc[df_s['ID'] == r['ID'], col] = r[col]
@@ -1076,75 +884,42 @@ elif menu == "📊 在庫・PSA管理":
             st.subheader("🛠️ メンテナンス")
             with st.container(border=True):
                 st.markdown("#### 🌐 最新相場の一括取得・更新 (究極スナイパー版)")
-                if st.button("🔄 自動更新ONのカードの相場を最新にする", use_container_width=True):
-                    df_inv_maint = load_data()
-                    items_to_update = df_inv_maint[(df_inv_maint['相場更新'] == True) & (df_inv_maint['ステータス'] != '売却済み')]
-                    
+                if st.button("🔄 自動更新ONの相場を最新にする", use_container_width=True):
+                    df_inv_maint = load_data(); items_to_update = df_inv_maint[(df_inv_maint['相場更新'] == True) & (df_inv_maint['ステータス'] != '売却済み')]
                     unique_queries = items_to_update[['商品名', '収録パック', '種類']].drop_duplicates(subset=['商品名', '収録パック'])
-                    
-                    if unique_queries.empty: 
-                        st.info("更新対象のカードがありませんでした。")
+                    if unique_queries.empty: st.info("対象なし")
                     else:
-                        progress_text = st.empty()
-                        progress_bar = st.progress(0)
-                        total_items = len(unique_queries)
+                        p_text, p_bar, total = st.empty(), st.progress(0), len(unique_queries)
                         for i, (_, row) in enumerate(unique_queries.iterrows()):
-                            orig_name, orig_pack, item_type = row['商品名'], row['収録パック'], row['種類']
-                            
-                            search_kw = generate_search_keyword(orig_name)
-                            progress_text.text(f"🔍 検索中: {search_kw} ({i+1}/{total_items})")
-                            time.sleep(1.0)
+                            o_n, o_p, i_t = row['商品名'], row['収録パック'], row['種類']; s_kw = generate_search_keyword(o_n); p_text.text(f"🔍 {s_kw} ({i+1}/{total})"); time.sleep(1.0)
                             try:
-                                results = search_card_rush(search_kw)
-                                best_match = get_best_match(orig_name, orig_pack, results, item_type)
-                                if best_match:
-                                    mask = (df_inv_maint['商品名'] == orig_name) & (df_inv_maint['収録パック'] == orig_pack)
-                                    df_inv_maint.loc[mask, '参考相場'] = best_match['price']
-                                    df_inv_maint.loc[mask, '商品URL'] = best_match['url']
+                                results = search_card_rush(s_kw); best = get_best_match(o_n, o_p, results, i_t)
+                                if best:
+                                    mask = (df_inv_maint['商品名'] == o_n) & (df_inv_maint['収録パック'] == o_p)
+                                    df_inv_maint.loc[mask, '参考相場'], df_inv_maint.loc[mask, '商品URL'] = best['price'], best['url']
                             except Exception: pass
-                            progress_bar.progress((i + 1) / total_items)
-                        save_data(df_inv_maint)
-                        progress_text.text("✨ 完了しました！")
-                        st.success("✅ 最新の相場に一括更新しました！"); time.sleep(2); st.rerun()
-
+                            p_bar.progress((i + 1) / total)
+                        save_data(df_inv_maint); p_text.text("✨ 完了"); st.success("✅ 更新成功"); time.sleep(2); st.rerun()
             with st.container(border=True):
                 st.markdown("#### ✂️ 在庫の個別化（細胞分裂）")
                 df_to_split = df_active[df_active['在庫数'] > 1].copy()
-                if df_to_split.empty: st.info("個別化できるまとめ在庫はありません。")
+                if df_to_split.empty: st.info("対象なし")
                 else:
-                    df_to_split['分割対象'] = False
-                    split_ed = st.data_editor(df_to_split[['分割対象', '商品名', '収録パック', '状態_PSA', '在庫数', 'ID']], hide_index=True, use_container_width=True)
-                    selected_split = split_ed[split_ed['分割対象'] == True]
-                    if not selected_split.empty and st.button("🚨 選択した在庫を1点ずつにバラバラにする", type="primary", use_container_width=True):
+                    df_to_split['分割対象'] = False; split_ed = st.data_editor(df_to_split[['分割対象', '商品名', '収録パック', '状態_PSA', '在庫数', 'ID']], hide_index=True, use_container_width=True)
+                    if not split_ed[split_ed['分割対象']].empty and st.button("🚨 バラバラにする", type="primary", use_container_width=True):
                         df_main = load_data()
-                        for _, s_row in selected_split.iterrows():
-                            tid, qty = s_row['ID'], int(s_row['在庫数'])
-                            orig_row = df_main[df_main['ID'] == tid].iloc[0]
-                            df_main = df_main[df_main['ID'] != tid]
-                            for _ in range(qty):
-                                new_r = orig_row.copy()
-                                new_r['ID'], new_r['在庫数'] = "P" + uuid.uuid4().hex[:8], 1
-                                df_main = pd.concat([df_main, pd.DataFrame([new_r])], ignore_index=True)
-                        save_data(df_main); st.success("細胞分裂が完了しました！"); time.sleep(2); st.rerun()
-
+                        for _, s_row in split_ed[split_ed['分割対象']].iterrows():
+                            tid, qty = s_row['ID'], int(s_row['在庫数']); orig_row = df_main[df_main['ID'] == tid].iloc[0]; df_main = df_main[df_main['ID'] != tid]
+                            for _ in range(qty): new_r = orig_row.copy(); new_r['ID'], new_r['在庫数'] = "P" + uuid.uuid4().hex[:8], 1; df_main = pd.concat([df_main, pd.DataFrame([new_r])], ignore_index=True)
+                        save_data(df_main); st.success("細胞分裂完了"); time.sleep(2); st.rerun()
             with st.container(border=True):
-                st.markdown("#### 🔗 在庫おまとめ（商品統合）")
-                df_to_m = df_active.copy(); df_to_m['統合対象'] = False
-                m_search = st.text_input("🔍 統合検索")
+                st.markdown("#### 🔗 商品統合"); df_to_m = df_active.copy(); df_to_m['統合対象'] = False; m_search = st.text_input("🔍 検索")
                 if m_search: df_to_m = df_to_m[df_to_m['商品名'].str.contains(m_search, na=False)]
                 m_ed = st.data_editor(df_to_m[['統合対象', '商品名', '状態_PSA', '在庫数', '原価', 'ID']], hide_index=True, use_container_width=True)
-                sel_m = m_ed[m_ed['統合対象'] == True]
-                if len(sel_m) >= 2:
+                if len(m_ed[m_ed['統合対象']]) >= 2:
                     if st.button("🚨 統合確定"):
-                        df_m = load_data()
-                        t_qty = sel_m['在庫数'].sum(); t_cost = int((sel_m['原価'] * sel_m['在庫数']).sum() / t_qty)
-                        master_id = sel_m.iloc[0]['ID']; master_r = df_active[df_active['ID'] == master_id].iloc[0].copy()
-                        df_m = df_m[~df_m['ID'].isin(sel_m['ID'].tolist())]
-                        master_r['在庫数'], master_r['原価'] = t_qty, t_cost
-                        df_m = pd.concat([df_m, pd.DataFrame([master_r])], ignore_index=True)
-                        save_data(df_m); st.success("統合完了"); st.rerun()
-
-            st.button("🚨 原価を全再計算する (神の計算機)", on_click=lambda: save_data(recalculate_moving_average_costs()))
+                        df_m = load_data(); sel_m = m_ed[m_ed['統合対象']]; t_qty = sel_m['在庫数'].sum(); t_cost = int((sel_m['原価'] * sel_m['在庫数']).sum() / t_qty); m_id = sel_m.iloc[0]['ID']; m_r = df_active[df_active['ID'] == m_id].iloc[0].copy(); df_m = df_m[~df_m['ID'].isin(sel_m['ID'].tolist())]; m_r['在庫数'], m_r['原価'] = t_qty, t_cost; df_m = pd.concat([df_m, pd.DataFrame([m_r])], ignore_index=True); save_data(df_m); st.success("統合完了"); st.rerun()
+            st.button("🚨 原価を全再計算する", on_click=lambda: save_data(recalculate_moving_average_costs()))
 
 # =========================================================
 # 🖨️ 個別管理・ラベル
@@ -1153,143 +928,69 @@ elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
     df = load_data()
     if not df.empty:
-        df_act = df[(df['ステータス'] == '在庫あり') & (df['在庫数'] == 1)].copy()
-        s_lbl = st.text_input("🔍 商品名検索")
+        df_act = df[(df['ステータス'] == '在庫あり') & (df['在庫数'] == 1)].copy(); s_lbl = st.text_input("🔍 商品名検索")
         if s_lbl: df_act = df_act[df_act['商品名'].str.contains(s_lbl, na=False)]
-        if df_act.empty: st.info("個別管理対象がありません")
+        if df_act.empty: st.info("対象なし")
         else:
-            df_act['印刷対象'] = False
-            st.markdown("##### 📝 1. 情報の編集と印刷対象の選択")
-            l_ed = st.data_editor(
-                df_act[['印刷対象', '商品名', '状態_PSA', '重量', '個別メモ', 'ID']], 
-                hide_index=True, 
-                column_config={
-                    "印刷対象": st.column_config.CheckboxColumn("印刷", default=False, width="small"),
-                    "商品名": st.column_config.TextColumn("商品名", disabled=True),
-                    "状態_PSA": st.column_config.TextColumn("状態", disabled=True, width="small"),
-                    "重量": st.column_config.TextColumn("重量(g)"),
-                    "個別メモ": st.column_config.TextColumn("ラベル印字メモ (2行程度まで)"),
-                    "ID": None
-                }, use_container_width=True)
-                
+            df_act['印刷対象'] = False; l_ed = st.data_editor(df_act[['印刷対象', '商品名', '状態_PSA', '重量', '個別メモ', 'ID']], hide_index=True, column_config={"印刷対象": st.column_config.CheckboxColumn("印刷", width="small"), "商品名": st.column_config.TextColumn("商品名", disabled=True), "重量": st.column_config.TextColumn("重量(g)"), "個別メモ": st.column_config.TextColumn("印字メモ"), "ID": None}, use_container_width=True)
             if st.button("💾 重量・メモを保存", type="primary"):
                 df_s = load_data()
-                for _, r in l_ed.iterrows():
-                    df_s.loc[df_s['ID'] == r['ID'], '重量'] = r['重量']
-                    df_s.loc[df_s['ID'] == r['ID'], '個別メモ'] = r['個別メモ']
-                save_data(df_s); st.success("保存完了！最新の状態がシールに反映されます。"); st.rerun()
-                
-            sel_p = l_ed[l_ed['印刷対象'] == True]
-            st.divider()
-            st.markdown("##### 🖨️ 2. ラベル用紙への印刷 (A4・24面)")
-            start_pos = st.number_input("📌 印刷開始位置 (1〜24)", min_value=1, max_value=24, value=1)
-            
+                for _, r in l_ed.iterrows(): df_s.loc[df_s['ID'] == r['ID'], '重量'], df_s.loc[df_s['ID'] == r['ID'], '個別メモ'] = r['重量'], r['個別メモ']
+                save_data(df_s); st.success("保存完了"); st.rerun()
+            sel_p = l_ed[l_ed['印刷対象'] == True]; st.divider(); st.markdown("##### 🖨️ 2. ラベル用紙への印刷 (A4・24面)"); start_pos = st.number_input("📌 印刷開始位置 (1〜24)", min_value=1, max_value=24, value=1)
             if not sel_p.empty:
                 items_to_print = []
                 for _, r in sel_p.iterrows():
-                    orig_item = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict()
-                    orig_item['重量'] = r['重量']
-                    orig_item['個別メモ'] = r['個別メモ']
-                    items_to_print.append(orig_item)
-                
+                    orig = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict(); orig['重量'], orig['個別メモ'] = r['重量'], r['個別メモ']; items_to_print.append(orig)
                 st.download_button(f"📄 {len(items_to_print)}枚のラベルHTMLをダウンロード", generate_label_html(items_to_print, start_pos=start_pos), file_name=f"labels_start{start_pos}.html", mime="text/html", type="primary")
-            else:
-                st.button("📄 ラベルHTMLをダウンロード", disabled=True)
+            else: st.button("📄 ラベルHTMLをダウンロード", disabled=True)
 
 # =========================================================
 # 🛍️ オリパ工場
 # =========================================================
 elif menu == "🛍️ オリパ工場":
-    st.header("🛍️ オリパ工場")
-    df = load_data()
+    st.header("🛍️ オリパ工場"); df = load_data()
     if not df.empty:
-        df_av = df[(df['ステータス'] == '在庫あり') | (df['ステータス'] == '鑑定済み')].copy()
-        
-        col_l, col_r = st.columns([1.5, 1])
+        df_av = df[(df['ステータス'] == '在庫あり') | (df['ステータス'] == '鑑定済み')].copy(); col_l, col_r = st.columns([1.5, 1])
         with col_l:
-            st.subheader("① 封入するカード・素材の選択")
-            
-            scan_mode = st.radio("素材の追加方法", ["🔫 物理スキャナー", "📱 スマホ/iPad内蔵カメラ"], horizontal=True)
-            scan_oripa = None
-            
-            if scan_mode == "🔫 物理スキャナー":
-                st.text_input("📷 スキャンして追加 (ID入力)", key="phys_scan_val_oripa", on_change=cb_phys_oripa)
-                scan_oripa = st.session_state.pop('phys_scan_pend_oripa', None)
+            scan_mode = st.radio("追加方法", ["🔫 物理スキャナー", "📱 スマホ内蔵カメラ"], horizontal=True); scan_oripa = None
+            if scan_mode == "🔫 物理スキャナー": st.text_input("📷 スキャン", key="phys_scan_val_oripa", on_change=cb_phys_oripa); scan_oripa = st.session_state.pop('phys_scan_pend_oripa', None)
             else:
                 cam_res = _scanner(scanned_ids=st.session_state['oripa_scanned'], valid_ids=list(df_av['ID'].values), key="cam_oripa")
-                if cam_res and isinstance(cam_res, dict):
-                    if cam_res['ts'] != st.session_state.get('last_cam_ts_oripa'):
-                        st.session_state['last_cam_ts_oripa'] = cam_res['ts']
-                        scan_oripa = cam_res['id']
-
+                if cam_res and isinstance(cam_res, dict) and cam_res['ts'] != st.session_state.get('last_cam_ts_oripa'): st.session_state['last_cam_ts_oripa'], scan_oripa = cam_res['ts'], cam_res['id']
             if scan_oripa:
                 if scan_oripa in df_av['ID'].values:
-                    if scan_oripa not in st.session_state['oripa_scanned']:
-                        st.session_state['oripa_scanned'].append(scan_oripa)
-                        added_item_name = df_av[df_av['ID'] == scan_oripa].iloc[0]['商品名']
-                        st.toast(f"✅ スキャン完了: {added_item_name} を追加しました！", icon="🎉")
-                    else: st.toast(f"⚠️ すでに追加されています: {scan_oripa}", icon="⚠️")
-                else: st.toast(f"❌ 在庫が見つかりません: {scan_oripa}", icon="❌")
+                    if scan_oripa not in st.session_state['oripa_scanned']: st.session_state['oripa_scanned'].append(scan_oripa); st.toast(f"✅ 追加: {df_av[df_av['ID'] == scan_oripa].iloc[0]['商品名']}")
+                    else: st.toast("⚠️ 既に追加済")
+                else: st.toast("❌ 在庫なし")
                 st.rerun()
-
             if st.session_state['oripa_scanned']:
-                with st.container(border=True):
-                    st.markdown(f"#### 📥 今回の封入リスト（スキャン済: {len(st.session_state['oripa_scanned'])} 枚）")
-                    scanned_items = df_av[df_av['ID'].isin(st.session_state['oripa_scanned'])]
-                    if not scanned_items.empty:
-                        st.dataframe(scanned_items[['商品名', '状態_PSA', '原価', 'ID', '個別メモ']], hide_index=True, use_container_width=True)
-                st.divider()
-
-            st.markdown("##### 📦 全在庫リスト (手動選択も可能)")
-            df_av['オリパに使う'] = False; df_av['使用数'] = 0
+                with st.container(border=True): st.markdown(f"#### 📥 封入リスト ({len(st.session_state['oripa_scanned'])} 枚)"); st.dataframe(df_av[df_av['ID'].isin(st.session_state['oripa_scanned'])][['商品名', '状態_PSA', '原価', 'ID', '個別メモ']], hide_index=True, use_container_width=True)
+            st.markdown("##### 📦 全在庫リスト"); df_av['オリパに使う'], df_av['使用数'] = False, 0
             for s in st.session_state['oripa_scanned']:
                 if s in df_av['ID'].values: df_av.loc[df_av['ID'] == s, 'オリパに使う'], df_av.loc[df_av['ID'] == s, '使用数'] = True, 1
             o_ed = st.data_editor(df_av[['オリパに使う', '商品名', '原価', '在庫数', '使用数', 'ID', '個別メモ']], hide_index=True, use_container_width=True)
-            sel_o = o_ed[(o_ed['オリパに使う'] == True) & (o_ed['使用数'] > 0)]
-            
         with col_r:
-            if st.button("🗑️ スキャン履歴クリア"):
-                st.session_state['oripa_scanned'] = []
-                st.rerun()
-                
-            o_name = st.text_input("オリパ名称")
-            total_u = st.number_input("全口数", min_value=1, value=100)
-            u_price = st.number_input("販売単価", min_value=0, value=1000)
-            s_fee = st.number_input("送料/口", value=185); p_fee = st.number_input("梱包/口", value=50)
-            
+            if st.button("🗑️ 履歴クリア"): st.session_state['oripa_scanned'] = []; st.rerun()
+            o_n, total_u, u_p, s_f, p_f = st.text_input("名称"), st.number_input("口数", min_value=1, value=100), st.number_input("単価", value=1000), st.number_input("送料/口", value=185), st.number_input("梱包/口", value=50)
+            sel_o = o_ed[(o_ed['オリパに使う'] == True) & (o_ed['使用数'] > 0)]
             if not sel_o.empty:
-                m_cost = sum(sel_o['原価'] * sel_o['使用数']); e_cost = (s_fee + p_fee) * total_u
-                t_cost = m_cost + e_cost; u_cost = int(t_cost / total_u)
-                
-                st.info(f"🃏 現在選択されているカード: **{sum(sel_o['使用数'])} 枚**")
-                
-                mc1, mc2 = st.columns(2)
-                mc1.metric("総原価", f"¥{t_cost:,}"); mc2.metric("見込み純利益", f"¥{(u_price * total_u) - t_cost:,}")
-                
-                if o_name and st.button("🔨 オリパ作成", type="primary", use_container_width=True):
-                    df = load_data()
-                    s_recs = []
+                t_c = sum(sel_o['原価'] * sel_o['使用数']) + (s_f + p_f) * total_u; st.info(f"🃏 合計: {sum(sel_o['使用数'])} 枚"); c1, c2 = st.columns(2); c1.metric("総原価", f"¥{t_c:,}"); c2.metric("利益", f"¥{(u_p * total_u) - t_c:,}")
+                if o_n and st.button("🔨 作成", type="primary", use_container_width=True):
+                    df, s_recs = load_data(), []
                     for _, row in sel_o.iterrows():
-                        df.loc[df['ID'] == row['ID'], '在庫数'] -= int(row['使用数'])
+                        df.loc[df['ID'] == row['ID'], '在庫数'] -= int(row['使用_qty' if '使用_qty' in row else '使用数']);
                         if df.loc[df['ID'] == row['ID'], '在庫数'].values[0] <= 0: df.loc[df['ID'] == row['ID'], 'ステータス'] = 'オリパ消費'
-                        s_recs.append({'ID': "S"+uuid.uuid4().hex[:8], '元の在庫ID': row['ID'], '売却日': datetime.now().strftime('%Y-%m-%d'), '商品名': row['商品名'], '収録パック': '', '状態_PSA': '-', '売却数': row['使用数'], '売上額': 0, '手数料': 0, '経費_送料': 0, '純利益': 0, '販路': 'システム：オリパ消費', '備考': f'オリパ[{o_name}]素材', '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
-                    df = pd.concat([df, pd.DataFrame([{'ID': "O"+uuid.uuid4().hex[:8], '商品名': f"【オリパ】{o_name}", '種類': 'オリジナルパック', '在庫数': total_u, '原価': u_cost, '参考相場': u_price, 'ステータス': '在庫あり', '仕入日': datetime.now().strftime('%Y-%m-%d'), '相場更新': False, '重量': '', '個別メモ': '', '商品URL': ''}])], ignore_index=True)
-                    save_data(df); save_sales_data(pd.concat([load_sales_data(), pd.DataFrame(s_recs)], ignore_index=True))
-                    st.session_state['oripa_scanned'] = []
-                    st.success("作成完了"); st.rerun()
+                        sales_records.append({'ID': "S"+uuid.uuid4().hex[:8], '元の在庫ID': row['ID'], '売却日': datetime.now().strftime('%Y-%m-%d'), '商品名': row['商品名'], '収録パック': '', '状態_PSA': '-', '売却数': row['使用数'], '売上額': 0, '手数料': 0, '経費_送料': 0, '純利益': 0, '販路': 'システム：オリパ消費', '備考': f'オリパ[{o_n}]素材', '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
+                    df = pd.concat([df, pd.DataFrame([{'ID': "O"+uuid.uuid4().hex[:8], '商品名': f"【オリパ】{o_n}", '種類': 'オリジナルパック', '在庫数': total_u, '原価': int(t_c / total_u), '参考相場': u_p, 'ステータス': '在庫あり', '仕入日': datetime.now().strftime('%Y-%m-%d'), '相場更新': False, '重量': '', '個別メモ': '', '商品URL': ''}])], ignore_index=True); save_data(df); save_sales_data(pd.concat([load_sales_data(), pd.DataFrame(sales_records)], ignore_index=True)); st.session_state['oripa_scanned'] = []; st.success("完了"); st.rerun()
 
 # =========================================================
 # 📖 帳簿・分析
 # =========================================================
 elif menu == "📖 帳簿・分析":
-    st.header("📖 帳簿・分析")
-    df_inv, df_pur, df_sales = load_data(), load_purchase_data(), load_sales_data()
-    t1, t2, t3, t4 = st.tabs(["📈 状況", "📒 売上", "📒 仕入", "📤 出力"])
+    st.header("📖 帳簿・分析"); df_inv, df_pur, df_sales = load_data(), load_purchase_data(), load_sales_data(); t1, t2, t3, t4 = st.tabs(["📈 状況", "📒 売上", "📒 仕入", "📤 出力"])
     with t1:
-        if not df_inv.empty:
-            df_act = df_inv[df_inv['ステータス'] != '売却済み']
-            c1, c2 = st.columns(2); c1.metric("在庫原価総額", f"¥{(df_act['原価']*df_act['在庫数']).sum():,}"); c2.metric("見込み売上", f"¥{(df_act['参考相場']*df_act['在庫数']).sum():,}")
+        if not df_inv.empty: df_act = df_inv[df_inv['ステータス'] != '売却済み']; c1, c2 = st.columns(2); c1.metric("在庫原価総額", f"¥{(df_act['原価']*df_act['在庫数']).sum():,}"); c2.metric("見込み売上", f"¥{(df_act['参考相場']*df_act['在庫数']).sum():,}")
     with t2: st.dataframe(df_sales, hide_index=True)
     with t3: st.dataframe(df_pur, hide_index=True)
-    with t4:
-        st.download_button("📤 在庫CSV", df_inv.to_csv(index=False).encode('utf-8-sig'), "inventory.csv", "text/csv")
+    with t4: st.download_button("📤 在庫CSV", df_inv.to_csv(index=False).encode('utf-8-sig'), "inventory.csv", "text/csv")
