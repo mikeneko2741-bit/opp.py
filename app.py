@@ -15,7 +15,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.9)
+# ⚙️ 設定・定数 (v5.10)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -549,10 +549,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.9)
+# 🖥️ アプリ画面 (v5.10)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.9")
+st.title("🎴 ぽっけぇ～道 管理システム v5.10")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -639,7 +639,6 @@ if menu == "📦 スピード仕入・解体":
                     st.rerun()
 
     with col_right:
-        # ✨ v5.9: 仕入カートの商品数を表示
         total_cart_qty = sum(item['qty'] for item in st.session_state['cart'])
         st.subheader(f"② カートの中身と原価計算 (計 {total_cart_qty} 点)")
         
@@ -793,17 +792,13 @@ elif menu == "📊 在庫・PSA管理":
                                 'sell_price': def_price, 'qty': 1, 'max_qty': int(trow['在庫数'])
                             })
                             st.toast(f"✅ レジに追加しました: {trow['商品名']}", icon="🛒")
-                        else:
-                            st.toast("⚠️ すでにレジに入っています。数量を変更してください。", icon="⚠️")
-                    else:
-                        st.toast("❌ 在庫が見つかりません。", icon="❌")
+                        else: st.toast("⚠️ すでにレジに入っています。数量を変更してください。", icon="⚠️")
+                    else: st.toast("❌ 在庫が見つかりません。", icon="❌")
                     st.rerun()
 
                 st.write("---")
-                if not st.session_state['sell_cart']:
-                    st.info("商品をスキャンするか、リストから選んでレジに追加してください。")
+                if not st.session_state['sell_cart']: st.info("商品をスキャンするか、リストから選んでレジに追加してください。")
                 else:
-                    # ✨ v5.9: 売却レジのカート商品数を表示
                     total_sell_qty = sum(item['qty'] for item in st.session_state['sell_cart'])
                     st.markdown(f"#### 🛍️ お会計カート (計 {total_sell_qty} 点)")
                     
@@ -820,7 +815,6 @@ elif menu == "📊 在庫・PSA管理":
                             "id": None
                         }, use_container_width=True
                     )
-                    
                     needs_rerun = False
                     for idx, row in edited_sell.iterrows():
                         for item in st.session_state['sell_cart']:
@@ -831,7 +825,6 @@ elif menu == "📊 在庫・PSA管理":
                                     item['qty'] = act_qty
                                     needs_rerun = True
                     if needs_rerun: st.rerun()
-                    
                     if edited_sell['削除'].any():
                         if st.button("🗑️ チェックした商品を外す"):
                             keep_ids = edited_sell[~edited_sell['削除']]['id'].tolist()
@@ -844,38 +837,31 @@ elif menu == "📊 在庫・PSA管理":
                     st.rerun()
                 
                 with st.container(border=True):
-                    if not st.session_state['sell_cart']:
-                        st.write("カートは空です")
+                    if not st.session_state['sell_cart']: st.write("カートは空です")
                     else:
                         total_sales = sum(item['sell_price'] * item['qty'] for item in st.session_state['sell_cart'])
                         total_cost = sum(item['cost'] * item['qty'] for item in st.session_state['sell_cart'])
                         total_sell_qty = sum(item['qty'] for item in st.session_state['sell_cart'])
                         
                         st.markdown(f"### 💰 売上合計: ¥{total_sales:,}")
-                        # ✨ v5.9: お買い上げ点数を強調表示
                         st.write(f"🛒 お買い上げ点数: **{total_sell_qty} 点**")
                         st.caption(f"原価合計: ¥{total_cost:,}")
-                        
                         ch = st.selectbox("販路", ["BASE (Web)", "BASE (PayID)", "メルカリ", "店舗・直接", "その他"])
                         sc = st.number_input("送料・梱包費 (全体)", min_value=0, value=185 if "店舗" not in ch else 0)
                         note = st.text_input("全体メモ (レシート共通)")
-                        
                         if st.button("✨ 一括で会計を確定 ✨", type="primary", use_container_width=True):
                             df_inv_s = load_data()
                             df_sales_s = load_sales_data()
                             receipt_id = "R" + str(uuid.uuid4())[:7]
                             sales_records = []
-                            
                             for item in st.session_state['sell_cart']:
                                 s_price = item['sell_price'] * item['qty']
                                 fee = int(s_price * 0.066 + 40) if "Web" in ch else int(s_price * 0.095 + 40) if "PayID" in ch else int(s_price * 0.1) if "メルカリ" in ch else 0
                                 prorated_sc = int(sc * (s_price / total_sales)) if total_sales > 0 else int(sc / len(st.session_state['sell_cart']))
                                 profit = s_price - fee - prorated_sc - (item['cost'] * item['qty'])
-                                
                                 new_q = int(df_inv_s.loc[df_inv_s['ID'] == item['id'], '在庫数'].values[0]) - item['qty']
                                 df_inv_s.loc[df_inv_s['ID'] == item['id'], '在庫数'] = new_q
                                 if new_q <= 0: df_inv_s.loc[df_inv_s['ID'] == item['id'], 'ステータス'] = '売却済み'
-                                
                                 sales_records.append({
                                     'ID': "S"+str(uuid.uuid4())[:7], '元の在庫ID': item['id'], '売却日': datetime.now().strftime('%Y-%m-%d'), 
                                     '商品名': item['name'], '収録パック': item['pack'], '状態_PSA': item['cond'], 
@@ -883,10 +869,8 @@ elif menu == "📊 在庫・PSA管理":
                                     '純利益': profit, '販路': ch, '備考': f"{note} [明細:{receipt_id}]".strip(), 
                                     '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                                 })
-                                
                             save_data(df_inv_s)
                             save_sales_data(pd.concat([df_sales_s, pd.DataFrame(sales_records)], ignore_index=True))
-                            
                             st.session_state['sell_cart'] = []
                             st.success(f"🎉 お会計完了！ (レシート番号: {receipt_id})"); time.sleep(2); st.rerun()
 
@@ -944,7 +928,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価を全再計算する (神の計算機)", on_click=lambda: save_data(recalculate_moving_average_costs()))
 
 # =========================================================
-# 🖨️ 個別管理・ラベル
+# 🖨️ 個別管理・ラベル (✨v5.10 完全版：リアルタイム印字の復旧)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -982,14 +966,15 @@ elif menu == "🖨️ 個別管理・ラベル":
             start_pos = st.number_input("📌 印刷開始位置 (1〜24)", min_value=1, max_value=24, value=1)
             
             if not sel_p.empty:
-                items = []
+                # ✨ v5.10: 画面の入力をリアルタイムでシールに流し込む処理（復活）
+                items_to_print = []
                 for _, r in sel_p.iterrows():
                     orig_item = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict()
                     orig_item['重量'] = r['重量']
                     orig_item['個別メモ'] = r['個別メモ']
-                    items.append(orig_item)
+                    items_to_print.append(orig_item)
                 
-                st.download_button(f"📄 {len(items)}枚のラベルHTMLをダウンロード", generate_label_html(items, start_pos=start_pos), file_name=f"labels_start{start_pos}.html", mime="text/html", type="primary")
+                st.download_button(f"📄 {len(items_to_print)}枚のラベルHTMLをダウンロード", generate_label_html(items_to_print, start_pos=start_pos), file_name=f"labels_start{start_pos}.html", mime="text/html", type="primary")
             else:
                 st.button("📄 ラベルHTMLをダウンロード", disabled=True)
 
@@ -1030,7 +1015,6 @@ elif menu == "🛍️ オリパ工場":
                 else: st.toast(f"❌ 在庫が見つかりません: {scan_oripa}", icon="❌")
                 st.rerun()
 
-            # ✨ v5.9: スキャン枚数の表示を追加
             if st.session_state['oripa_scanned']:
                 with st.container(border=True):
                     st.markdown(f"#### 📥 今回の封入リスト（スキャン済: {len(st.session_state['oripa_scanned'])} 枚）")
@@ -1060,12 +1044,10 @@ elif menu == "🛍️ オリパ工場":
                 m_cost = sum(sel_o['原価'] * sel_o['使用数']); e_cost = (s_fee + p_fee) * total_u
                 t_cost = m_cost + e_cost; u_cost = int(t_cost / total_u)
                 
-                # ✨ v5.9: 選択枚数を青枠で強調表示
                 st.info(f"🃏 現在選択されているカード: **{sum(sel_o['使用数'])} 枚**")
                 
                 mc1, mc2 = st.columns(2)
-                mc1.metric("総原価", f"¥{t_cost:,}")
-                mc2.metric("見込み純利益", f"¥{(u_price * total_u) - t_cost:,}")
+                mc1.metric("総原価", f"¥{t_cost:,}"); mc2.metric("見込み純利益", f"¥{(u_price * total_u) - t_cost:,}")
                 
                 if o_name and st.button("🔨 オリパ作成", type="primary", use_container_width=True):
                     df = load_data()
