@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.15.1)
+# ⚙️ 設定・定数 (v5.15.2)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -188,7 +188,6 @@ def load_data():
                 try:
                     ws_inv.update_cells(updates)
                 except Exception:
-                    # ✨修正ポイント✨ 既存シートの列数制限(15列等)に引っかかった場合、自動で列を拡張してリトライする
                     ws_inv.add_cols(5)
                     ws_inv.update_cells(updates)
 
@@ -509,35 +508,63 @@ def generate_search_keyword(orig_name):
     if is_box and "BOX" not in cleaned.upper(): cleaned += " BOX"
     return cleaned.strip() if cleaned else orig_name.strip()
 
-def get_best_match(orig_name, orig_pack, results):
-    ng_words = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット"]
+# ✨ v5.15.2 柔軟かつ高精度なAIスコアリングアルゴリズム ✨
+def get_best_match(orig_name, orig_pack, results, item_type=""):
+    ng_words = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱"]
     rarities = ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
     
-    orig_upper = orig_name.upper()
-    orig_rarities = [r for r in rarities if re.search(rf'\b{r}\b', orig_upper) or f"({r})" in orig_upper or f"【{r}】" in orig_upper]
+    orig_name_clean = orig_name.strip().upper()
+    orig_pack_clean = orig_pack.strip().upper() if orig_pack else ""
     
+    def extract_rarities(text):
+        found = []
+        for r in rarities:
+            # 前後が英字(A-Z)でない場合にマッチさせる（日本語内のレアリティ表記を確実に拾う）
+            if re.search(rf'(?<![A-Z]){r}(?![A-Z])', text):
+                found.append(r)
+        return found
+
+    orig_r = extract_rarities(orig_name_clean)
+    is_single = ("シングル" in item_type) or (item_type == "")
+
     valid_results = []
     for res in results:
         res_name = res['name'].upper()
         if any(ng in res_name for ng in ng_words): continue
-        if orig_pack and res['pack'] and orig_pack.upper() != res['pack'].upper(): continue
         
-        res_rarities = [r for r in rarities if re.search(rf'\b{r}\b', res_name) or f"({r})" in res_name or f"【{r}】" in res_name]
+        score = 0
         
-        if orig_rarities:
-            if not any(r in res_rarities for r in orig_rarities): continue
-        else:
-            if res_rarities: continue
+        # 1. 名前の文字列類似度 (ベーススコア: 0〜100点)
+        clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', orig_name_clean).strip()
+        clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', res_name).strip()
+        base_score = difflib.SequenceMatcher(None, clean_orig, clean_res).ratio() * 100
+        score += base_score
+        
+        # 2. パック名の照合
+        res_pack = res.get('pack', '').upper()
+        if orig_pack_clean and res_pack:
+            if orig_pack_clean == res_pack: score += 30
+            else: score -= 10
+        elif orig_pack_clean and not res_pack: score -= 5
             
-        clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', orig_name).strip().upper()
-        clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', res['name']).strip().upper()
-        score = difflib.SequenceMatcher(None, clean_orig, clean_res).ratio()
-        
-        res['score'] = score
-        valid_results.append(res)
-        
+        # 3. レアリティの照合 (シングルの場合のみ厳格に判定)
+        if is_single:
+            res_r = extract_rarities(res_name)
+            if orig_r:
+                if any(r in res_r for r in orig_r): score += 50
+                else: score -= 100 # 指定レアリティが含まれていない
+            else:
+                if res_r: score -= 100 # 指定がない(ノーマル等)のにレアリティが付いている
+                    
+        res['final_score'] = score
+        # 極端に名前が違うものやペナルティを受けたものを除外
+        if score > 20:
+            valid_results.append(res)
+            
     if not valid_results: return None
-    valid_results.sort(key=lambda x: (-x['score'], x['price']))
+    
+    # スコアが同点の場合は価格が安い方(実勢価格)を優先
+    valid_results.sort(key=lambda x: (-x['final_score'], x['price']))
     return valid_results[0]
 
 def fetch_from_url(url):
@@ -597,10 +624,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.15.1)
+# 🖥️ アプリ画面 (v5.15.2)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.15.1")
+st.title("🎴 ぽっけぇ～道 管理システム v5.15.2")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -994,12 +1021,14 @@ elif menu == "📊 在庫・PSA管理":
                         total_items = len(unique_queries)
                         for i, (_, row) in enumerate(unique_queries.iterrows()):
                             orig_name, orig_pack = row['商品名'], row['収録パック']
+                            # ✨ 種類を取得してスナイパー関数に渡す
+                            item_type = items_to_update[(items_to_update['商品名'] == orig_name) & (items_to_update['収録パック'] == orig_pack)]['種類'].iloc[0]
                             search_kw = generate_search_keyword(orig_name)
                             progress_text.text(f"🔍 検索中: {search_kw} ({i+1}/{total_items})")
                             time.sleep(1.0)
                             try:
                                 results = search_card_rush(search_kw)
-                                best_match = get_best_match(orig_name, orig_pack, results)
+                                best_match = get_best_match(orig_name, orig_pack, results, item_type)
                                 if best_match:
                                     mask = (df_inv_maint['商品名'] == orig_name) & (df_inv_maint['収録パック'] == orig_pack)
                                     df_inv_maint.loc[mask, '参考相場'] = best_match['price']
