@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.15.3)
+# ⚙️ 設定・定数 (v5.16)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -499,14 +499,32 @@ def clean_product_name(text):
     if not isinstance(text, str): return str(text)
     return re.sub(r'\{-}.*$', '', text).strip()
 
+# ✨ v5.16 超・強力なキーワードクリーニング（投網漁） ✨
 def generate_search_keyword(orig_name):
     is_box = "BOX" in orig_name.upper() or "ｂｏｘ" in orig_name.lower()
-    match = re.search(r'『(.+?)』', orig_name)
-    base = match.group(1) if match else orig_name
-    cleaned = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', base).strip()
-    cleaned = cleaned.replace("拡張パック", "").replace("強化", "").replace("ハイクラスパック", "").replace("構築済みデッキ", "").strip()
-    if is_box and "BOX" not in cleaned.upper(): cleaned += " BOX"
-    return cleaned.strip() if cleaned else orig_name.strip()
+    cleaned = str(orig_name)
+    
+    # 1. 不要な単語を削除
+    remove_words = ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]
+    for w in remove_words:
+        cleaned = cleaned.replace(w, "")
+        
+    # 2. 波カッコ{}、角カッコ[]、隅付きカッコ【】、丸カッコ() とその中身を完全に消去
+    # 例: {127/100} や [SV9] や 【SAR】 を消す
+    cleaned = re.sub(r'【.*?】|\[.*?\]|\(.*?\)|\{.*?\}', ' ', cleaned)
+    
+    # 3. かぎカッコ「」や『』は、カッコの「記号だけ」を消去（中身のパック名は残す）
+    # 例: 「サイバージャッジ」 -> サイバージャッジ
+    cleaned = cleaned.replace('「', ' ').replace('」', ' ').replace('『', ' ').replace('』', ' ')
+    
+    # 4. 余分なスペースを1つにまとめてトリム
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    
+    if is_box and "BOX" not in cleaned.upper(): 
+        cleaned += " BOX"
+        
+    # もし全て消えてしまったら元の名前でフォールバック
+    return cleaned.strip() if cleaned.strip() else orig_name.strip()
 
 def get_best_match(orig_name, orig_pack, results, item_type=""):
     ng_words = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱"]
@@ -617,10 +635,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.15.3)
+# 🖥️ アプリ画面 (v5.16)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.15.3")
+st.title("🎴 ぽっけぇ～道 管理システム v5.16")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -1001,13 +1019,11 @@ elif menu == "📊 在庫・PSA管理":
         with tab_maint:
             st.subheader("🛠️ メンテナンス")
             with st.container(border=True):
-                st.markdown("#### 🌐 最新相場の一括取得・更新 (高精度スナイパー版)")
+                st.markdown("#### 🌐 最新相場の一括取得・更新 (投網＆スナイパー完全版)")
                 if st.button("🔄 自動更新ONのカードの相場を最新にする", use_container_width=True):
                     df_inv_maint = load_data()
                     items_to_update = df_inv_maint[(df_inv_maint['相場更新'] == True) & (df_inv_maint['ステータス'] != '売却済み')]
                     
-                    # ✨v5.15.3 修正ポイント✨
-                    # 最初から「種類」も含めて一意なリストを作っておき、再検索でのIndexErrorを100%防止する
                     unique_queries = items_to_update[['商品名', '収録パック', '種類']].drop_duplicates(subset=['商品名', '収録パック'])
                     
                     if unique_queries.empty: 
@@ -1017,9 +1033,9 @@ elif menu == "📊 在庫・PSA管理":
                         progress_bar = st.progress(0)
                         total_items = len(unique_queries)
                         for i, (_, row) in enumerate(unique_queries.iterrows()):
-                            # ✨ここで直接取得できるのでエラーが起きない✨
                             orig_name, orig_pack, item_type = row['商品名'], row['収録パック'], row['種類']
                             
+                            # ✨v5.16 投網検索用のクリーンなキーワードを生成
                             search_kw = generate_search_keyword(orig_name)
                             progress_text.text(f"🔍 検索中: {search_kw} ({i+1}/{total_items})")
                             time.sleep(1.0)
