@@ -15,7 +15,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.11)
+# ⚙️ 設定・定数 (v5.13)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -26,7 +26,7 @@ SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
 
 # ---------------------------------------------------------
-# 📷 スマホ内蔵カメラ用 QRスキャナー部品 (v5.11 iPad音声ONボタン追加)
+# 📷 スマホ内蔵カメラ用 QRスキャナー部品
 # ---------------------------------------------------------
 QR_HTML = """
 <!DOCTYPE html>
@@ -177,7 +177,6 @@ def load_data():
     ws_inv, _, _, _ = check_and_init_sheets()
     if ws_inv:
         try:
-            # ✨ v5.11: スプレッドシートの見出し自動修復機能
             header = ws_inv.row_values(1)
             updates = []
             while len(header) < 15: header.append("")
@@ -477,7 +476,7 @@ def encrypt_cost(cost):
     return mapping.get(cost_str[0], cost_str[0]) + cost_str[1:]
 
 def generate_label_html(items, start_pos=1):
-    html = """<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>ぽっけぇ〜道 管理ラベル</title><style>@media print { @page { margin: 0; } body { margin: 0; } } body { font-family: sans-serif; margin: 0; padding: 0; background: #fff; } .page { width: 210mm; min-height: 297mm; padding: 12mm 4mm; margin: 0 auto; box-sizing: border-box; display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 33.9mm; gap: 0; page-break-after: always; } .label { padding: 3mm; box-sizing: border-box; display: flex; align-items: center; overflow: hidden; border: 1px dashed #eee; } .empty-label { padding: 3mm; box-sizing: border-box; border: 1px dashed transparent; } .qr-code { width: 20mm; height: 20mm; flex-shrink: 0; } .details { margin-left: 3mm; font-size: 8pt; line-height: 1.2; width: 100%; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; height: 100%; } .id { font-size: 10pt; font-weight: bold; margin-bottom: 2px; } .name { font-weight: bold; font-size: 9pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; } .memo { font-size: 7.5pt; color: #444; line-height: 1.1; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; flex-grow: 1; } .bottom-row { display: flex; justify-content: space-between; align-items: flex-end; font-size: 7pt; color: #333; margin-top: auto; } .enc-cost { font-weight: bold; }</style><script>window.onload = function() { window.print(); }</script></head><body><div class="page">"""
+    html = """<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>ぽっけぇ〜道 管理ラベル</title><style>@media print { @page { margin: 0; } body { margin: 0; } } body { font-family: sans-serif; margin: 0; padding: 0; background: #fff; } .page { width: 210mm; min-height: 297mm; padding: 12mm 4mm; margin: 0 auto; box-sizing: border-box; display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 33.9mm; gap: 0; page-break-after: always; } .label { padding: 3mm; box-sizing: border-box; display: flex; align-items: center; overflow: hidden; border: 1px dashed #eee; } .empty-label { padding: 3mm; box-sizing: border-box; border: 1px dashed transparent; } .qr-code { width: 20mm; height: 20mm; flex-shrink: 0; } .details { margin-left: 3mm; font-size: 8pt; line-height: 1.2; width: 100%; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; height: 100%; } .id { font-size: 10pt; font-weight: bold; margin-bottom: 2px; } .name { font-weight: bold; font-size: 9pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; } .memo { font-size: 9pt; font-weight: bold; color: #333; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; flex-grow: 1; margin-bottom: 2px; } .bottom-row { display: flex; justify-content: space-between; align-items: flex-end; font-size: 7pt; color: #333; margin-top: auto; } .enc-cost { font-weight: bold; }</style><script>window.onload = function() { window.print(); }</script></head><body><div class="page">"""
     for _ in range(start_pos - 1): html += '<div class="empty-label"></div>'
     for item in items:
         enc_cost = encrypt_cost(item.get('原価', 0))
@@ -571,10 +570,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.11)
+# 🖥️ アプリ画面 (v5.13)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.11")
+st.title("🎴 ぽっけぇ～道 管理システム v5.13")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -922,6 +921,36 @@ elif menu == "📊 在庫・PSA管理":
 
         with tab_maint:
             st.subheader("🛠️ メンテナンス")
+            # ✨ v5.13: 誤って削除した相場更新機能をここに完全復活させました！
+            with st.container(border=True):
+                st.markdown("#### 🌐 最新相場の一括取得・更新")
+                if st.button("🔄 自動更新ONのカードの相場を最新にする", use_container_width=True):
+                    df_inv_maint = load_data()
+                    items_to_update = df_inv_maint[(df_inv_maint['相場更新'] == True) & (df_inv_maint['ステータス'] != '売却済み')]
+                    unique_queries = items_to_update[['商品名', '収録パック']].drop_duplicates()
+                    if unique_queries.empty: 
+                        st.info("更新対象のカードがありませんでした。")
+                    else:
+                        progress_text = st.empty()
+                        progress_bar = st.progress(0)
+                        total_items = len(unique_queries)
+                        for i, (_, row) in enumerate(unique_queries.iterrows()):
+                            orig_name, orig_pack = row['商品名'], row['収録パック']
+                            search_kw = generate_search_keyword(orig_name)
+                            progress_text.text(f"🔍 検索中: {search_kw} ({i+1}/{total_items})")
+                            time.sleep(1.0)
+                            try:
+                                results = search_card_rush(search_kw)
+                                best_match = get_best_match(orig_name, orig_pack, results)
+                                if best_match:
+                                    mask = (df_inv_maint['商品名'] == orig_name) & (df_inv_maint['収録パック'] == orig_pack)
+                                    df_inv_maint.loc[mask, '参考相場'] = best_match['price']
+                            except Exception: pass
+                            progress_bar.progress((i + 1) / total_items)
+                        save_data(df_inv_maint)
+                        progress_text.text("✨ 完了しました！")
+                        st.success("✅ 最新の相場に一括更新しました！"); time.sleep(2); st.rerun()
+
             with st.container(border=True):
                 st.markdown("#### ✂️ 在庫の個別化（細胞分裂）")
                 df_to_split = df_active[df_active['在庫数'] > 1].copy()
@@ -1000,14 +1029,14 @@ elif menu == "🖨️ 個別管理・ラベル":
             start_pos = st.number_input("📌 印刷開始位置 (1〜24)", min_value=1, max_value=24, value=1)
             
             if not sel_p.empty:
-                items = []
+                items_to_print = []
                 for _, r in sel_p.iterrows():
                     orig_item = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict()
                     orig_item['重量'] = r['重量']
                     orig_item['個別メモ'] = r['個別メモ']
-                    items.append(orig_item)
+                    items_to_print.append(orig_item)
                 
-                st.download_button(f"📄 {len(items)}枚のラベルHTMLをダウンロード", generate_label_html(items, start_pos=start_pos), file_name=f"labels_start{start_pos}.html", mime="text/html", type="primary")
+                st.download_button(f"📄 {len(items_to_print)}枚のラベルHTMLをダウンロード", generate_label_html(items_to_print, start_pos=start_pos), file_name=f"labels_start{start_pos}.html", mime="text/html", type="primary")
             else:
                 st.button("📄 ラベルHTMLをダウンロード", disabled=True)
 
