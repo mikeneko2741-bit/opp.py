@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.15.2)
+# ⚙️ 設定・定数 (v5.15.3)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -508,7 +508,6 @@ def generate_search_keyword(orig_name):
     if is_box and "BOX" not in cleaned.upper(): cleaned += " BOX"
     return cleaned.strip() if cleaned else orig_name.strip()
 
-# ✨ v5.15.2 柔軟かつ高精度なAIスコアリングアルゴリズム ✨
 def get_best_match(orig_name, orig_pack, results, item_type=""):
     ng_words = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱"]
     rarities = ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
@@ -519,7 +518,6 @@ def get_best_match(orig_name, orig_pack, results, item_type=""):
     def extract_rarities(text):
         found = []
         for r in rarities:
-            # 前後が英字(A-Z)でない場合にマッチさせる（日本語内のレアリティ表記を確実に拾う）
             if re.search(rf'(?<![A-Z]){r}(?![A-Z])', text):
                 found.append(r)
         return found
@@ -534,36 +532,31 @@ def get_best_match(orig_name, orig_pack, results, item_type=""):
         
         score = 0
         
-        # 1. 名前の文字列類似度 (ベーススコア: 0〜100点)
         clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', orig_name_clean).strip()
         clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】', '', res_name).strip()
         base_score = difflib.SequenceMatcher(None, clean_orig, clean_res).ratio() * 100
         score += base_score
         
-        # 2. パック名の照合
         res_pack = res.get('pack', '').upper()
         if orig_pack_clean and res_pack:
             if orig_pack_clean == res_pack: score += 30
             else: score -= 10
         elif orig_pack_clean and not res_pack: score -= 5
             
-        # 3. レアリティの照合 (シングルの場合のみ厳格に判定)
         if is_single:
             res_r = extract_rarities(res_name)
             if orig_r:
                 if any(r in res_r for r in orig_r): score += 50
-                else: score -= 100 # 指定レアリティが含まれていない
+                else: score -= 100 
             else:
-                if res_r: score -= 100 # 指定がない(ノーマル等)のにレアリティが付いている
+                if res_r: score -= 100 
                     
         res['final_score'] = score
-        # 極端に名前が違うものやペナルティを受けたものを除外
         if score > 20:
             valid_results.append(res)
             
     if not valid_results: return None
     
-    # スコアが同点の場合は価格が安い方(実勢価格)を優先
     valid_results.sort(key=lambda x: (-x['final_score'], x['price']))
     return valid_results[0]
 
@@ -624,10 +617,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.15.2)
+# 🖥️ アプリ画面 (v5.15.3)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.15.2")
+st.title("🎴 ぽっけぇ～道 管理システム v5.15.3")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -1012,7 +1005,11 @@ elif menu == "📊 在庫・PSA管理":
                 if st.button("🔄 自動更新ONのカードの相場を最新にする", use_container_width=True):
                     df_inv_maint = load_data()
                     items_to_update = df_inv_maint[(df_inv_maint['相場更新'] == True) & (df_inv_maint['ステータス'] != '売却済み')]
-                    unique_queries = items_to_update[['商品名', '収録パック']].drop_duplicates()
+                    
+                    # ✨v5.15.3 修正ポイント✨
+                    # 最初から「種類」も含めて一意なリストを作っておき、再検索でのIndexErrorを100%防止する
+                    unique_queries = items_to_update[['商品名', '収録パック', '種類']].drop_duplicates(subset=['商品名', '収録パック'])
+                    
                     if unique_queries.empty: 
                         st.info("更新対象のカードがありませんでした。")
                     else:
@@ -1020,9 +1017,9 @@ elif menu == "📊 在庫・PSA管理":
                         progress_bar = st.progress(0)
                         total_items = len(unique_queries)
                         for i, (_, row) in enumerate(unique_queries.iterrows()):
-                            orig_name, orig_pack = row['商品名'], row['収録パック']
-                            # ✨ 種類を取得してスナイパー関数に渡す
-                            item_type = items_to_update[(items_to_update['商品名'] == orig_name) & (items_to_update['収録パック'] == orig_pack)]['種類'].iloc[0]
+                            # ✨ここで直接取得できるのでエラーが起きない✨
+                            orig_name, orig_pack, item_type = row['商品名'], row['収録パック'], row['種類']
+                            
                             search_kw = generate_search_keyword(orig_name)
                             progress_text.text(f"🔍 検索中: {search_kw} ({i+1}/{total_items})")
                             time.sleep(1.0)
