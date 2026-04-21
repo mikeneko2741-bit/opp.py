@@ -15,7 +15,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.10)
+# ⚙️ 設定・定数 (v5.11)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -26,7 +26,7 @@ SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
 
 # ---------------------------------------------------------
-# 📷 スマホ内蔵カメラ用 QRスキャナー部品
+# 📷 スマホ内蔵カメラ用 QRスキャナー部品 (v5.11 iPad音声ONボタン追加)
 # ---------------------------------------------------------
 QR_HTML = """
 <!DOCTYPE html>
@@ -36,15 +36,29 @@ QR_HTML = """
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body style="margin:0; padding:5px; font-family:sans-serif; background:#f0f2f6; min-height:400px; display:flex; flex-direction:column;">
+  
+  <div id="audio-unlock" style="text-align:center; padding:12px; background:#e0f7fa; color:#3182ce; font-weight:bold; cursor:pointer; border-radius:8px; margin-bottom:10px; font-size:15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+    🔊 ここをタップしてスキャン音をON (iPad/スマホ用)
+  </div>
+
   <div id="reader" style="width:100%; max-width:500px; margin:0 auto; border-radius:8px; overflow:hidden; border:1px solid #ddd; background:#fff; flex-grow:1; min-height:350px;"></div>
+  
   <script>
     let scannedIds = [];
     let validIds = [];
     
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     const ctx = new AudioContext();
-    function playBeep(type) {
+    
+    document.getElementById('audio-unlock').addEventListener('click', function() {
         if (ctx.state === 'suspended') ctx.resume();
+        playBeep('success');
+        this.style.display = 'none';
+        updateHeight();
+    });
+
+    function playBeep(type) {
+        if (ctx.state === 'suspended') return;
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.connect(gain);
@@ -66,7 +80,7 @@ QR_HTML = """
 
     function updateHeight() {
       let h = document.body.scrollHeight + 20;
-      if (h < 420) h = 420;
+      if (h < 450) h = 450;
       window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*");
     }
 
@@ -163,6 +177,14 @@ def load_data():
     ws_inv, _, _, _ = check_and_init_sheets()
     if ws_inv:
         try:
+            # ✨ v5.11: スプレッドシートの見出し自動修復機能
+            header = ws_inv.row_values(1)
+            updates = []
+            while len(header) < 15: header.append("")
+            if header[13] != '重量': updates.append(gspread.Cell(row=1, col=14, value='重量'))
+            if header[14] != '個別メモ': updates.append(gspread.Cell(row=1, col=15, value='個別メモ'))
+            if updates: ws_inv.update_cells(updates)
+
             df = get_as_dataframe(ws_inv, evaluate_formulas=True)
             df = df.dropna(subset=['ID'])
             df = df[df['ID'] != '']
@@ -549,10 +571,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.10)
+# 🖥️ アプリ画面 (v5.11)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.10")
+st.title("🎴 ぽっけぇ～道 管理システム v5.11")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = str(uuid.uuid4())
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -762,7 +784,7 @@ elif menu == "📊 在庫・PSA管理":
             c_left, c_right = st.columns([1.2, 1])
             
             with c_left:
-                scan_mode = st.radio("スキャン方法", ["🔫 物理スキャナー", "📱 スマホ内蔵カメラ"], horizontal=True)
+                scan_mode = st.radio("スキャン方法", ["🔫 物理スキャナー", "📱 スマホ/iPad内蔵カメラ"], horizontal=True)
                 target_sell_id = None
                 active_ids = {f"[{r['収録パック']}] {r['商品名']} ({r['状態_PSA']} | 残:{r['在庫数']}) [ID:{r['ID']}]": r['ID'] for _, r in df_active[df_active['在庫数'] > 0].iterrows()}
                 existing_cart_ids = [item['id'] for item in st.session_state['sell_cart']]
@@ -771,7 +793,6 @@ elif menu == "📊 在庫・PSA管理":
                     st.text_input("📷 スキャンしてカートに追加", key="phys_scan_val_sell", on_change=cb_phys_sell)
                     target_sell_id = st.session_state.pop('phys_scan_pend_sell', None)
                 else:
-                    st.info("カメラへのアクセスを許可し、枠内にQRコードを写してください。音が出ます。")
                     cam_res = _scanner(scanned_ids=existing_cart_ids, valid_ids=list(active_ids.values()), key="cam_sell")
                     if cam_res and isinstance(cam_res, dict):
                         if cam_res['ts'] != st.session_state.get('last_cam_ts_sell'):
@@ -792,12 +813,15 @@ elif menu == "📊 在庫・PSA管理":
                                 'sell_price': def_price, 'qty': 1, 'max_qty': int(trow['在庫数'])
                             })
                             st.toast(f"✅ レジに追加しました: {trow['商品名']}", icon="🛒")
-                        else: st.toast("⚠️ すでにレジに入っています。数量を変更してください。", icon="⚠️")
-                    else: st.toast("❌ 在庫が見つかりません。", icon="❌")
+                        else:
+                            st.toast("⚠️ すでにレジに入っています。数量を変更してください。", icon="⚠️")
+                    else:
+                        st.toast("❌ 在庫が見つかりません。", icon="❌")
                     st.rerun()
 
                 st.write("---")
-                if not st.session_state['sell_cart']: st.info("商品をスキャンするか、リストから選んでレジに追加してください。")
+                if not st.session_state['sell_cart']:
+                    st.info("商品をスキャンするか、リストから選んでレジに追加してください。")
                 else:
                     total_sell_qty = sum(item['qty'] for item in st.session_state['sell_cart'])
                     st.markdown(f"#### 🛍️ お会計カート (計 {total_sell_qty} 点)")
@@ -815,6 +839,7 @@ elif menu == "📊 在庫・PSA管理":
                             "id": None
                         }, use_container_width=True
                     )
+                    
                     needs_rerun = False
                     for idx, row in edited_sell.iterrows():
                         for item in st.session_state['sell_cart']:
@@ -825,6 +850,7 @@ elif menu == "📊 在庫・PSA管理":
                                     item['qty'] = act_qty
                                     needs_rerun = True
                     if needs_rerun: st.rerun()
+                    
                     if edited_sell['削除'].any():
                         if st.button("🗑️ チェックした商品を外す"):
                             keep_ids = edited_sell[~edited_sell['削除']]['id'].tolist()
@@ -837,7 +863,8 @@ elif menu == "📊 在庫・PSA管理":
                     st.rerun()
                 
                 with st.container(border=True):
-                    if not st.session_state['sell_cart']: st.write("カートは空です")
+                    if not st.session_state['sell_cart']:
+                        st.write("カートは空です")
                     else:
                         total_sales = sum(item['sell_price'] * item['qty'] for item in st.session_state['sell_cart'])
                         total_cost = sum(item['cost'] * item['qty'] for item in st.session_state['sell_cart'])
@@ -846,22 +873,27 @@ elif menu == "📊 在庫・PSA管理":
                         st.markdown(f"### 💰 売上合計: ¥{total_sales:,}")
                         st.write(f"🛒 お買い上げ点数: **{total_sell_qty} 点**")
                         st.caption(f"原価合計: ¥{total_cost:,}")
+                        
                         ch = st.selectbox("販路", ["BASE (Web)", "BASE (PayID)", "メルカリ", "店舗・直接", "その他"])
                         sc = st.number_input("送料・梱包費 (全体)", min_value=0, value=185 if "店舗" not in ch else 0)
                         note = st.text_input("全体メモ (レシート共通)")
+                        
                         if st.button("✨ 一括で会計を確定 ✨", type="primary", use_container_width=True):
                             df_inv_s = load_data()
                             df_sales_s = load_sales_data()
                             receipt_id = "R" + str(uuid.uuid4())[:7]
                             sales_records = []
+                            
                             for item in st.session_state['sell_cart']:
                                 s_price = item['sell_price'] * item['qty']
                                 fee = int(s_price * 0.066 + 40) if "Web" in ch else int(s_price * 0.095 + 40) if "PayID" in ch else int(s_price * 0.1) if "メルカリ" in ch else 0
                                 prorated_sc = int(sc * (s_price / total_sales)) if total_sales > 0 else int(sc / len(st.session_state['sell_cart']))
                                 profit = s_price - fee - prorated_sc - (item['cost'] * item['qty'])
+                                
                                 new_q = int(df_inv_s.loc[df_inv_s['ID'] == item['id'], '在庫数'].values[0]) - item['qty']
                                 df_inv_s.loc[df_inv_s['ID'] == item['id'], '在庫数'] = new_q
                                 if new_q <= 0: df_inv_s.loc[df_inv_s['ID'] == item['id'], 'ステータス'] = '売却済み'
+                                
                                 sales_records.append({
                                     'ID': "S"+str(uuid.uuid4())[:7], '元の在庫ID': item['id'], '売却日': datetime.now().strftime('%Y-%m-%d'), 
                                     '商品名': item['name'], '収録パック': item['pack'], '状態_PSA': item['cond'], 
@@ -869,8 +901,10 @@ elif menu == "📊 在庫・PSA管理":
                                     '純利益': profit, '販路': ch, '備考': f"{note} [明細:{receipt_id}]".strip(), 
                                     '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                                 })
+                                
                             save_data(df_inv_s)
                             save_sales_data(pd.concat([df_sales_s, pd.DataFrame(sales_records)], ignore_index=True))
+                            
                             st.session_state['sell_cart'] = []
                             st.success(f"🎉 お会計完了！ (レシート番号: {receipt_id})"); time.sleep(2); st.rerun()
 
@@ -928,7 +962,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価を全再計算する (神の計算機)", on_click=lambda: save_data(recalculate_moving_average_costs()))
 
 # =========================================================
-# 🖨️ 個別管理・ラベル (✨v5.10 完全版：リアルタイム印字の復旧)
+# 🖨️ 個別管理・ラベル
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -966,15 +1000,14 @@ elif menu == "🖨️ 個別管理・ラベル":
             start_pos = st.number_input("📌 印刷開始位置 (1〜24)", min_value=1, max_value=24, value=1)
             
             if not sel_p.empty:
-                # ✨ v5.10: 画面の入力をリアルタイムでシールに流し込む処理（復活）
-                items_to_print = []
+                items = []
                 for _, r in sel_p.iterrows():
                     orig_item = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict()
                     orig_item['重量'] = r['重量']
                     orig_item['個別メモ'] = r['個別メモ']
-                    items_to_print.append(orig_item)
+                    items.append(orig_item)
                 
-                st.download_button(f"📄 {len(items_to_print)}枚のラベルHTMLをダウンロード", generate_label_html(items_to_print, start_pos=start_pos), file_name=f"labels_start{start_pos}.html", mime="text/html", type="primary")
+                st.download_button(f"📄 {len(items)}枚のラベルHTMLをダウンロード", generate_label_html(items, start_pos=start_pos), file_name=f"labels_start{start_pos}.html", mime="text/html", type="primary")
             else:
                 st.button("📄 ラベルHTMLをダウンロード", disabled=True)
 
@@ -991,14 +1024,13 @@ elif menu == "🛍️ オリパ工場":
         with col_l:
             st.subheader("① 封入するカード・素材の選択")
             
-            scan_mode = st.radio("素材の追加方法", ["🔫 物理スキャナー", "📱 スマホ内蔵カメラ (連続可)"], horizontal=True)
+            scan_mode = st.radio("素材の追加方法", ["🔫 物理スキャナー", "📱 スマホ/iPad内蔵カメラ"], horizontal=True)
             scan_oripa = None
             
             if scan_mode == "🔫 物理スキャナー":
                 st.text_input("📷 スキャンして追加 (ID入力)", key="phys_scan_val_oripa", on_change=cb_phys_oripa)
                 scan_oripa = st.session_state.pop('phys_scan_pend_oripa', None)
             else:
-                st.info("カメラへのアクセスを許可し、シールのQRコードをかざしてください。音が出ます。")
                 cam_res = _scanner(scanned_ids=st.session_state['oripa_scanned'], valid_ids=list(df_av['ID'].values), key="cam_oripa")
                 if cam_res and isinstance(cam_res, dict):
                     if cam_res['ts'] != st.session_state.get('last_cam_ts_oripa'):
