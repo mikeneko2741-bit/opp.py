@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.18)
+# ⚙️ 設定・定数 (v5.19)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -588,7 +588,6 @@ def get_best_match(orig_name, orig_pack, results, item_type=""):
     valid_results.sort(key=lambda x: (-x['final_score'], x['price']))
     return valid_results[0]
 
-# ✨ v5.18 javascript:void(0) などのダミーURLを徹底排除する修正 ✨
 def fetch_from_url(url):
     results = []
     try:
@@ -623,7 +622,6 @@ def fetch_from_url(url):
                     img_url = temp_url; break
             if img_url.startswith('/'): img_url = "https://www.cardrush-pokemon.jp" + img_url
             
-            # ✨ javascript: を含まない本物のリンクを探す ✨
             product_url = ""
             for a_tag in item.select('a[href]'):
                 href_val = a_tag['href']
@@ -631,7 +629,7 @@ def fetch_from_url(url):
                     product_url = href_val
                     if product_url.startswith('/'): 
                         product_url = "https://www.cardrush-pokemon.jp" + product_url
-                    break # 本物のURLが見つかったらループ終了
+                    break
             
             if price > 0: results.append({"name": clean_name, "pack": pack_code, "price": price, "image": img_url, "url": product_url})
         unique = []
@@ -652,10 +650,10 @@ def search_card_rush(keyword):
     return results
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.18)
+# 🖥️ アプリ画面 (v5.19)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.18")
+st.title("🎴 ぽっけぇ～道 管理システム v5.19")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -820,7 +818,9 @@ elif menu == "📊 在庫・PSA管理":
     if df.empty: st.info("在庫がありません")
     else:
         df_active = df[df['ステータス'] != '売却済み'].copy()
-        tab_singles, tab_box, tab_psa, tab_sell, tab_edit, tab_maint = st.tabs(["🃏 シングル", "📦 BOX・素材", "💎 PSA管理", "🛒 売却レジ", "✏️ 編集", "🛠️ メンテ"])
+        
+        # ✨ v5.19 タブに「種類別サマリー」を追加 ✨
+        tab_singles, tab_box, tab_summary, tab_psa, tab_sell, tab_edit, tab_maint = st.tabs(["🃏 シングル", "📦 BOX・素材", "📋 種類別サマリー", "💎 PSA管理", "🛒 売却レジ", "✏️ 編集", "🛠️ メンテ"])
         
         with tab_singles:
             df_s = df_active[(df_active['種類'] == 'シングルカード') & (~df_active['ステータス'].isin(['PSA提出中', '鑑定済み']))]
@@ -848,6 +848,45 @@ elif menu == "📊 在庫・PSA管理":
                     "商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")
                 }
             )
+
+        # ✨ v5.19 種類別サマリー（総在庫のおまとめ表示） ✨
+        with tab_summary:
+            st.markdown("#### 📋 種類別サマリー (同じカード・BOXのおまとめ表示)")
+            st.caption("※ここは確認専用の画面です。細胞分裂でバラバラに管理している在庫の「合計数」と「平均原価」がひと目でわかります。")
+            if df_active.empty:
+                st.info("集計する在庫がありません。")
+            else:
+                # 合計金額計算用の列を一時的に作成
+                df_sum_temp = df_active.copy()
+                df_sum_temp['行原価合計'] = df_sum_temp['原価'] * df_sum_temp['在庫数']
+
+                # 商品名、パック、状態、種類でグループ化して集計
+                summary_df = df_sum_temp.groupby(['種類', '商品名', '収録パック', '状態_PSA']).agg(
+                    総在庫数=('在庫数', 'sum'),
+                    総原価=('行原価合計', 'sum'),
+                    参考相場=('参考相場', 'max'),
+                    商品URL=('商品URL', 'first')
+                ).reset_index()
+
+                # 平均原価の計算
+                summary_df['平均原価'] = (summary_df['総原価'] / summary_df['総在庫数']).fillna(0).astype(int)
+                summary_df['総原価'] = summary_df['総原価'].astype(int)
+
+                # 表示用に列を整理
+                display_summary = summary_df[['種類', '商品URL', '商品名', '収録パック', '状態_PSA', '総在庫数', '平均原価', '総原価', '参考相場']]
+
+                st.dataframe(
+                    display_summary,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く"),
+                        "平均原価": st.column_config.NumberColumn("平均原価", format="¥%d"),
+                        "総原価": st.column_config.NumberColumn("総原価", format="¥%d"),
+                        "参考相場": st.column_config.NumberColumn("参考相場", format="¥%d"),
+                        "総在庫数": st.column_config.NumberColumn("総在庫数", format="%d 点")
+                    }
+                )
 
         with tab_psa:
             c1, c2 = st.columns(2)
