@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.20)
+# ⚙️ 設定・定数 (v5.21)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -169,7 +169,7 @@ def check_and_init_sheets():
         ws_sales.append_row(['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
     try: ws_cart = sh.worksheet(SHEET_CART)
     except:
-        ws_cart = st.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
+        ws_cart = sh.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
         ws_cart.append_row(['SessionID', 'Timestamp', 'CartJSON'])
     return ws_inv, ws_pur, ws_sales, ws_cart
 
@@ -614,11 +614,19 @@ def search_card_rush(keyword):
         results = fetch_from_url(url_b)
     return results
 
+# ✨ v5.21 追加：表のフィルタリング機能 ✨
+def filter_dataframe(df, search_text):
+    if not search_text: return df
+    # 小文字に変換して、商品名と収録パックの両方で部分一致検索を行う
+    search_lower = search_text.lower()
+    mask = df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)
+    return df[mask]
+
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.20)
+# 🖥️ アプリ画面 (v5.21)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.20")
+st.title("🎴 ぽっけぇ～道 管理システム v5.21")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -768,18 +776,29 @@ elif menu == "📊 在庫・PSA管理":
     else:
         df_active = df[df['ステータス'] != '売却済み'].copy()
         tab_singles, tab_box, tab_summary, tab_psa, tab_sell, tab_edit, tab_maint = st.tabs(["🃏 シングル", "📦 BOX・素材", "📋 種類別サマリー", "💎 PSA管理", "🛒 売却レジ", "✏️ 編集", "🛠️ メンテ"])
+        
+        # ✨ v5.21 シングルタブの検索 ✨
         with tab_singles:
             df_s = df_active[(df_active['種類'] == 'シングルカード') & (~df_active['ステータス'].isin(['PSA提出中', '鑑定済み']))]
-            st.dataframe(df_s[['商品URL', '商品名', '収録パック', '状態_PSA', '原価', '参考相場', '在庫数', '仕入日', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
+            search_s = st.text_input("🔍 シングルを検索 (商品名・パック)", key="search_s")
+            filtered_s = filter_dataframe(df_s, search_s)
+            
+            st.dataframe(filtered_s[['商品URL', '商品名', '収録パック', '状態_PSA', '原価', '参考相場', '在庫数', '仕入日', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
             st.divider()
-            target = st.selectbox("PSA提出するカードを選択", options=df_s['ID'].tolist(), format_func=lambda x: f"{df_s[df_s['ID']==x].iloc[0]['商品名']} (ID:{x})", index=None)
+            target = st.selectbox("PSA提出するカードを選択", options=filtered_s['ID'].tolist(), format_func=lambda x: f"{filtered_s[filtered_s['ID']==x].iloc[0]['商品名']} (ID:{x})", index=None)
             if target and st.button("✈️ PSA提出中にする"):
                 df.loc[df['ID'] == target, 'ステータス'] = 'PSA提出中'
                 save_data(df); st.success("変更完了"); st.rerun()
+                
+        # ✨ v5.21 BOXタブの検索 ✨
         with tab_box:
             df_b = df_active[df_active['種類'].isin(['未開封BOX', '素材・バルク', 'オリジナルパック', '未開封パック'])]
-            st.dataframe(df_b[['商品URL', '商品名', '種類', '原価', '在庫数', '参考相場', '重量', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
+            search_b = st.text_input("🔍 BOX・素材を検索 (商品名・パック)", key="search_b")
+            filtered_b = filter_dataframe(df_b, search_b)
+            
+            st.dataframe(filtered_b[['商品URL', '商品名', '種類', '原価', '在庫数', '参考相場', '重量', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
 
+        # ✨ v5.21 サマリータブの検索 ✨
         with tab_summary:
             st.markdown("#### 📋 種類別サマリー (同じカード・BOXのおまとめ表示)")
             st.caption("※細胞分裂でバラバラに管理している在庫の「合計数」と「平均原価」がひと目でわかります。")
@@ -787,11 +806,14 @@ elif menu == "📊 在庫・PSA管理":
             else:
                 df_sum_temp = df_active.copy()
                 df_sum_temp['行原価合計'] = df_sum_temp['原価'] * df_sum_temp['在庫数']
-                # ✨ v5.20 修正ポイント: dropna=False を指定し、パック名が空のBOX等も除外せず表示する ✨
                 summary_df = df_sum_temp.groupby(['種類', '商品名', '収録パック', '状態_PSA'], dropna=False).agg(総在庫数=('在庫数', 'sum'), 総原価=('行原価合計', 'sum'), 参考相場=('参考相場', 'max'), 商品URL=('商品URL', 'first')).reset_index()
                 summary_df['平均原価'] = (summary_df['総原価'] / summary_df['総在庫数']).fillna(0).astype(int)
                 display_summary = summary_df[['種類', '商品URL', '商品名', '収録パック', '状態_PSA', '総在庫数', '平均原価', '総原価', '参考相場']]
-                st.dataframe(display_summary, hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く"), "平均原価": st.column_config.NumberColumn("平均原価", format="¥%d"), "総原価": st.column_config.NumberColumn("総原価", format="¥%d"), "参考相場": st.column_config.NumberColumn("参考相場", format="¥%d"), "総在庫数": st.column_config.NumberColumn("総在庫数", format="%d 点")})
+                
+                search_sum = st.text_input("🔍 サマリーを検索 (商品名・パック)", key="search_sum")
+                filtered_summary = filter_dataframe(display_summary, search_sum)
+
+                st.dataframe(filtered_summary, hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く"), "平均原価": st.column_config.NumberColumn("平均原価", format="¥%d"), "総原価": st.column_config.NumberColumn("総原価", format="¥%d"), "参考相場": st.column_config.NumberColumn("参考相場", format="¥%d"), "総在庫数": st.column_config.NumberColumn("総在庫数", format="%d 点")})
 
         with tab_psa:
             c1, c2 = st.columns(2)
