@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.28)
+# ⚙️ 設定・定数 (v5.29 - Download Fix Edition)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -567,10 +567,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.28)
+# 🖥️ アプリ画面 (v5.29)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.28")
+st.title("🎴 ぽっけぇ～道 管理システム v5.29")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -816,7 +816,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価再計算", on_click=lambda: save_data(recalculate_moving_average_costs()))
 
 # =========================================================
-# ✨ 🖨️ 個別管理・ラベル (UI復元版)
+# ✨ 🖨️ 個別管理・ラベル (UI復元・ダウンロード修正版)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -870,9 +870,13 @@ elif menu == "🖨️ 個別管理・ラベル":
             sel_p = l_ed[l_ed['印刷対象'] == True]
             if not sel_p.empty:
                 items = [df_act[df_act['ID'] == r['ID']].iloc[0].to_dict() for _, r in sel_p.iterrows()]
+                
+                # ✨ v5.29: HTMLの文字列を .encode('utf-8') して明確なファイルデータに変換 ✨
+                html_data = generate_label_html(items, start_pos).encode('utf-8')
+                
                 st.download_button(
-                    f"📄 {len(items)}枚のラベルHTMLをダウンロード", 
-                    generate_label_html(items, start_pos), 
+                    label=f"📄 {len(items)}枚のラベルHTMLをダウンロード", 
+                    data=html_data,
                     file_name="labels.html", 
                     mime="text/html", 
                     type="primary"
