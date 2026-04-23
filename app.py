@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.25 - Dynamic Condition Sniper Edition)
+# ⚙️ 設定・定数 (v5.26 - Grouped Relay Batch Edition)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -26,7 +26,8 @@ SHEET_PURCHASE = '仕入帳'
 SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
 
-UPDATE_BATCH_SIZE = 10
+# バッチ処理の1回あたりの「種類」数（ID単位ではなく種類単位）
+UPDATE_BATCH_SIZE = 5
 
 # ---------------------------------------------------------
 # 📷 スマホ内蔵カメラ用 QRスキャナー部品
@@ -458,82 +459,55 @@ def generate_search_keyword(orig_name):
     col_match = re.search(r'(\d{2,4}/\d{2,4})', cleaned)
     col_number = col_match.group(1) if col_match else ""
     for w in ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]: cleaned = cleaned.replace(w, "")
-    
-    # ✨ v5.25: 〔状態B〕などのカッコ自体も検索キーワードからは削ぎ落とし、純粋な名前で投網漁をする ✨
     cleaned = re.sub(r'【.*?】|\[.*?\]|\(.*?\)|\{.*?\}|〔.*?〕', ' ', cleaned).replace('「', ' ').replace('」', ' ').replace('『', ' ').replace('』', ' ')
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    
     if is_box and "BOX" not in cleaned.upper(): cleaned += " BOX"
     if col_number and not is_box: cleaned += f" {col_number}"
     return cleaned.strip() if cleaned.strip() else orig_name.strip()
 
-# ✨ v5.25 動的状態判別（ダイナミック・スナイパー） ✨
 def get_best_match(orig_name, orig_pack, results, item_type=""):
-    # カードラッシュ特有のキズ・状態表記
     cond_words = ["状態A-", "状態B", "状態C", "キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱", "プレイ用"]
     rarities = ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
-    
     orig_name_clean, orig_pack_clean = orig_name.strip().upper(), (orig_pack.strip().upper() if orig_pack else "")
-    
-    # 店長が登録した商品名の中に、状態キーワード（状態Bなど）が含まれているか確認
     orig_conds = [cw for cw in cond_words if cw in orig_name_clean]
-    
     col_match = re.search(r'(\d{2,4}/\d{2,4})', orig_name_clean)
     orig_col_num = col_match.group(1) if col_match else ""
-    
     def extract_rarities(text):
         found = []
         for r in rarities:
             if re.search(rf'(?<![A-Z]){r}(?![A-Z])', text): found.append(r)
         return found
     orig_r, is_single, valid_results = extract_rarities(orig_name_clean), (("シングル" in item_type) or (item_type == "")), []
-    
     for res in results:
         res_name = res['name'].upper()
         res_conds = [cw for cw in cond_words if cw in res_name]
-        
-        # 🚨 状態のダイナミック判定 🚨
         if not orig_conds:
-            # 【モードA: 美品狙い】店長の登録に状態指定がない場合は、相手にキズあり表記があれば全除外
             if res_conds: continue
         else:
-            # 【モードB: キズ狙い】店長がキズありを指定している場合、相手もそれを持っていなければ除外
             if not any(c in res_name for c in orig_conds): continue
-                
         score = 0
-        if orig_conds and any(c in res_name for c in orig_conds): score += 300 # 状態も完全一致なら超高得点
-            
-        # 型番判定
+        if orig_conds and any(c in res_name for c in orig_conds): score += 300 
         if orig_col_num:
             if orig_col_num not in res_name: continue
             else: score += 200 
-            
-        # パック略号判定
         res_pack = res.get('pack', '').upper()
         if orig_pack_clean and res_pack:
             if orig_pack_clean != res_pack: continue 
             else: score += 50
         elif orig_pack_clean and not res_pack: score -= 10 
-            
-        # 類似度判定（比較の邪魔になるカッコや状態キーワードを一時的に消して純粋な文字比較）
         clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}|〔.*?〕', '', orig_name_clean).strip()
         clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}|〔.*?〕', '', res_name).strip()
         for cw in cond_words:
-            clean_orig = clean_orig.replace(cw, '')
-            clean_res = clean_res.replace(cw, '')
+            clean_orig, clean_res = clean_orig.replace(cw, ''), clean_res.replace(cw, '')
         score += difflib.SequenceMatcher(None, clean_orig.strip(), clean_res.strip()).ratio() * 100
-        
-        # レアリティ判定
         if is_single:
             res_r = extract_rarities(res_name)
             if orig_r:
                 if any(r in res_r for r in orig_r): score += 50
                 else: continue 
             elif res_r: score -= 100 
-                
         res['final_score'] = score
         if score > 0: valid_results.append(res)
-            
     if not valid_results: return None
     valid_results.sort(key=lambda x: (-x['final_score'], x['price']))
     return valid_results[0]
@@ -593,10 +567,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.25)
+# 🖥️ アプリ画面 (v5.26)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.25")
+st.title("🎴 ぽっけぇ～道 管理システム v5.26")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -605,7 +579,8 @@ if 'reset_key' not in st.session_state: st.session_state['reset_key'] = 0
 if 'oripa_scanned' not in st.session_state: st.session_state['oripa_scanned'] = []
 if 'sell_cart' not in st.session_state: st.session_state['sell_cart'] = []
 
-if 'relay_update_ids' not in st.session_state: st.session_state['relay_update_ids'] = []
+# ✨ v5.26: IDごとではなく「種類（グループ）」ごとのタスクリストに変更 ✨
+if 'relay_update_groups' not in st.session_state: st.session_state['relay_update_groups'] = []
 if 'is_updating' not in st.session_state: st.session_state['is_updating'] = False
 
 if 'phys_scan_val_sell' not in st.session_state: st.session_state['phys_scan_val_sell'] = ""
@@ -794,24 +769,46 @@ elif menu == "📊 在庫・PSA管理":
         with tab_maint:
             st.subheader("🛠️ メンテナンス")
             with st.container(border=True):
-                st.markdown("#### 🌐 最新相場の一括取得・更新 (自動リレー方式)")
+                st.markdown("#### 🌐 最新相場の一括取得・更新 (グループ一括更新方式)")
+                
+                # ✨ v5.26: グループごとのバッチ処理 ✨
                 if st.session_state['is_updating']:
-                    pending_ids = st.session_state['relay_update_ids']
-                    if not pending_ids:
+                    pending_groups = st.session_state['relay_update_groups']
+                    if not pending_groups:
                         st.session_state['is_updating'] = False; st.success("✅ 全ての更新が完了しました！"); time.sleep(2); st.rerun()
                     else:
-                        batch = pending_ids[:UPDATE_BATCH_SIZE]; st.info(f"🔄 バッチ更新中... 残り: {len(pending_ids)}件"); progress_bar = st.progress(0); df_maint = load_data()
-                        for i, tid in enumerate(batch):
-                            row = df_maint[df_maint['ID'] == tid].iloc[0]; o_n, o_p, i_t = row['商品名'], row['収録パック'], row['種類']; s_kw = generate_search_keyword(o_n)
+                        batch = pending_groups[:UPDATE_BATCH_SIZE]
+                        st.info(f"🔄 バッチ更新中... 残り: {len(pending_groups)}種類")
+                        progress_bar = st.progress(0)
+                        df_maint = load_data()
+                        
+                        for i, grp in enumerate(batch):
+                            o_n, o_p, i_t, o_c = grp['商品名'], grp['収録パック'], grp['種類'], grp['状態_PSA']
+                            s_kw = generate_search_keyword(o_n)
                             try:
-                                results = search_card_rush(s_kw); best = get_best_match(o_n, o_p, results, i_t)
-                                if best: mask = (df_maint['ID'] == tid); df_maint.loc[mask, '参考相場'], df_maint.loc[mask, '商品URL'] = best['price'], best['url']
+                                results = search_card_rush(s_kw)
+                                best = get_best_match(o_n, o_p, results, i_t)
+                                if best: 
+                                    # 同じ名前・パック・状態のカード「すべて」を一括で更新
+                                    mask = (df_maint['商品名'] == o_n) & (df_maint['収録パック'] == o_p) & (df_maint['状態_PSA'] == o_c)
+                                    df_maint.loc[mask, '参考相場'] = best['price']
+                                    df_maint.loc[mask, '商品URL'] = best['url']
                             except Exception: pass
                             progress_bar.progress((i + 1) / len(batch)); time.sleep(0.5) 
-                        save_data(df_maint); st.session_state['relay_update_ids'] = pending_ids[UPDATE_BATCH_SIZE:]; st.rerun() 
+                            
+                        save_data(df_maint)
+                        st.session_state['relay_update_groups'] = pending_groups[UPDATE_BATCH_SIZE:]
+                        st.rerun() 
+                        
                 if st.button("🚀 相場の一括更新を開始する (全自動)", use_container_width=True, disabled=st.session_state['is_updating']):
-                    df_target = load_data(); active_on_ids = df_target[(df_target['相場更新'] == True) & (df_target['ステータス'] != '売却済み')]['ID'].tolist()
-                    if active_on_ids: st.session_state['relay_update_ids'] = active_on_ids; st.session_state['is_updating'] = True; st.rerun()
+                    df_target = load_data()
+                    active_targets = df_target[(df_target['相場更新'] == True) & (df_target['ステータス'] != '売却済み')]
+                    if not active_targets.empty: 
+                        # ✨ v5.26: IDのリストではなく、商品名・パック・状態の「ユニークな組み合わせ」を作成する
+                        unique_groups = active_targets[['商品名', '収録パック', '種類', '状態_PSA']].drop_duplicates().to_dict('records')
+                        st.session_state['relay_update_groups'] = unique_groups
+                        st.session_state['is_updating'] = True
+                        st.rerun()
                     else: st.info("更新対象がありません。")
 
             with st.container(border=True):
