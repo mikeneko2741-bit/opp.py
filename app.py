@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.26 - Grouped Relay Batch Edition)
+# ⚙️ 設定・定数 (v5.27 - Exact Label Layout Edition)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -26,7 +26,7 @@ SHEET_PURCHASE = '仕入帳'
 SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
 
-# バッチ処理の1回あたりの「種類」数（ID単位ではなく種類単位）
+# バッチ処理の1回あたりの「種類」数
 UPDATE_BATCH_SIZE = 5
 
 # ---------------------------------------------------------
@@ -442,8 +442,9 @@ def encrypt_cost(cost):
     mapping = {'1':'A', '2':'B', '3':'C', '4':'D', '5':'E', '6':'F', '7':'G', '8':'H', '9':'I', '0':'J'}
     return mapping.get(cost_str[0], cost_str[0]) + cost_str[1:]
 
+# ✨ v5.27 修正ポイント：A4 24面ラベル専用（上下12.9mm、左右6mm）にミリ単位で完全最適化 ✨
 def generate_label_html(items, start_pos=1):
-    html = """<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>ぽっけぇ〜道 管理ラベル</title><style>@media print { @page { margin: 0; } body { margin: 0; } } body { font-family: sans-serif; margin: 0; padding: 0; background: #fff; } .page { width: 210mm; min-height: 297mm; padding: 12mm 4mm; margin: 0 auto; box-sizing: border-box; display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 33.9mm; gap: 0; page-break-after: always; } .label { padding: 3mm; box-sizing: border-box; display: flex; align-items: center; overflow: hidden; border: 1px dashed #eee; } .empty-label { padding: 3mm; box-sizing: border-box; border: 1px dashed transparent; } .qr-code { width: 20mm; height: 20mm; flex-shrink: 0; } .details { margin-left: 3mm; font-size: 8pt; line-height: 1.2; width: 100%; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; height: 100%; } .id { font-size: 10pt; font-weight: bold; margin-bottom: 2px; } .name { font-weight: bold; font-size: 9pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; } .memo { font-size: 9pt; font-weight: bold; color: #333; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; flex-grow: 1; margin-bottom: 2px; } .bottom-row { display: flex; justify-content: space-between; align-items: flex-end; font-size: 7pt; color: #333; margin-top: auto; } .enc-cost { font-weight: bold; }</style><script>window.onload = function() { window.print(); }</script></head><body><div class="page">"""
+    html = """<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>ぽっけぇ〜道 管理ラベル</title><style>@media print { @page { margin: 0; size: A4; } body { margin: 0; } } body { font-family: sans-serif; margin: 0; padding: 0; background: #fff; } .page { width: 210mm; min-height: 297mm; padding: 12.9mm 6mm; margin: 0 auto; box-sizing: border-box; display: grid; grid-template-columns: repeat(3, 66mm); grid-auto-rows: 33.9mm; gap: 0; page-break-after: always; } .label { width: 66mm; height: 33.9mm; padding: 3mm; box-sizing: border-box; display: flex; align-items: center; overflow: hidden; border: 1px dashed #eee; } .empty-label { width: 66mm; height: 33.9mm; padding: 3mm; box-sizing: border-box; border: 1px dashed transparent; } .qr-code { width: 20mm; height: 20mm; flex-shrink: 0; } .details { margin-left: 3mm; font-size: 8pt; line-height: 1.2; width: calc(100% - 23mm); overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; height: 100%; } .id { font-size: 10pt; font-weight: bold; margin-bottom: 2px; } .name { font-weight: bold; font-size: 9pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; } .memo { font-size: 9pt; font-weight: bold; color: #333; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; flex-grow: 1; margin-bottom: 2px; } .bottom-row { display: flex; justify-content: space-between; align-items: flex-end; font-size: 7pt; color: #333; margin-top: auto; } .enc-cost { font-weight: bold; }</style><script>window.onload = function() { window.print(); }</script></head><body><div class="page">"""
     for _ in range(start_pos - 1): html += '<div class="empty-label"></div>'
     for item in items:
         enc_cost, weight, memo = encrypt_cost(item.get('原価', 0)), (f" / {item.get('重量', '')}g" if item.get('重量') else ""), item.get('個別メモ', '')
@@ -567,10 +568,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.26)
+# 🖥️ アプリ画面 (v5.27)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.26")
+st.title("🎴 ぽっけぇ～道 管理システム v5.27")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -579,7 +580,6 @@ if 'reset_key' not in st.session_state: st.session_state['reset_key'] = 0
 if 'oripa_scanned' not in st.session_state: st.session_state['oripa_scanned'] = []
 if 'sell_cart' not in st.session_state: st.session_state['sell_cart'] = []
 
-# ✨ v5.26: IDごとではなく「種類（グループ）」ごとのタスクリストに変更 ✨
 if 'relay_update_groups' not in st.session_state: st.session_state['relay_update_groups'] = []
 if 'is_updating' not in st.session_state: st.session_state['is_updating'] = False
 
@@ -770,8 +770,6 @@ elif menu == "📊 在庫・PSA管理":
             st.subheader("🛠️ メンテナンス")
             with st.container(border=True):
                 st.markdown("#### 🌐 最新相場の一括取得・更新 (グループ一括更新方式)")
-                
-                # ✨ v5.26: グループごとのバッチ処理 ✨
                 if st.session_state['is_updating']:
                     pending_groups = st.session_state['relay_update_groups']
                     if not pending_groups:
@@ -781,7 +779,6 @@ elif menu == "📊 在庫・PSA管理":
                         st.info(f"🔄 バッチ更新中... 残り: {len(pending_groups)}種類")
                         progress_bar = st.progress(0)
                         df_maint = load_data()
-                        
                         for i, grp in enumerate(batch):
                             o_n, o_p, i_t, o_c = grp['商品名'], grp['収録パック'], grp['種類'], grp['状態_PSA']
                             s_kw = generate_search_keyword(o_n)
@@ -789,22 +786,18 @@ elif menu == "📊 在庫・PSA管理":
                                 results = search_card_rush(s_kw)
                                 best = get_best_match(o_n, o_p, results, i_t)
                                 if best: 
-                                    # 同じ名前・パック・状態のカード「すべて」を一括で更新
                                     mask = (df_maint['商品名'] == o_n) & (df_maint['収録パック'] == o_p) & (df_maint['状態_PSA'] == o_c)
                                     df_maint.loc[mask, '参考相場'] = best['price']
                                     df_maint.loc[mask, '商品URL'] = best['url']
                             except Exception: pass
                             progress_bar.progress((i + 1) / len(batch)); time.sleep(0.5) 
-                            
                         save_data(df_maint)
                         st.session_state['relay_update_groups'] = pending_groups[UPDATE_BATCH_SIZE:]
                         st.rerun() 
-                        
                 if st.button("🚀 相場の一括更新を開始する (全自動)", use_container_width=True, disabled=st.session_state['is_updating']):
                     df_target = load_data()
                     active_targets = df_target[(df_target['相場更新'] == True) & (df_target['ステータス'] != '売却済み')]
                     if not active_targets.empty: 
-                        # ✨ v5.26: IDのリストではなく、商品名・パック・状態の「ユニークな組み合わせ」を作成する
                         unique_groups = active_targets[['商品名', '収録パック', '種類', '状態_PSA']].drop_duplicates().to_dict('records')
                         st.session_state['relay_update_groups'] = unique_groups
                         st.session_state['is_updating'] = True
