@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.27 - Exact Label Layout Edition)
+# ⚙️ 設定・定数 (v5.28)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -442,7 +442,6 @@ def encrypt_cost(cost):
     mapping = {'1':'A', '2':'B', '3':'C', '4':'D', '5':'E', '6':'F', '7':'G', '8':'H', '9':'I', '0':'J'}
     return mapping.get(cost_str[0], cost_str[0]) + cost_str[1:]
 
-# ✨ v5.27 修正ポイント：A4 24面ラベル専用（上下12.9mm、左右6mm）にミリ単位で完全最適化 ✨
 def generate_label_html(items, start_pos=1):
     html = """<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>ぽっけぇ〜道 管理ラベル</title><style>@media print { @page { margin: 0; size: A4; } body { margin: 0; } } body { font-family: sans-serif; margin: 0; padding: 0; background: #fff; } .page { width: 210mm; min-height: 297mm; padding: 12.9mm 6mm; margin: 0 auto; box-sizing: border-box; display: grid; grid-template-columns: repeat(3, 66mm); grid-auto-rows: 33.9mm; gap: 0; page-break-after: always; } .label { width: 66mm; height: 33.9mm; padding: 3mm; box-sizing: border-box; display: flex; align-items: center; overflow: hidden; border: 1px dashed #eee; } .empty-label { width: 66mm; height: 33.9mm; padding: 3mm; box-sizing: border-box; border: 1px dashed transparent; } .qr-code { width: 20mm; height: 20mm; flex-shrink: 0; } .details { margin-left: 3mm; font-size: 8pt; line-height: 1.2; width: calc(100% - 23mm); overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; height: 100%; } .id { font-size: 10pt; font-weight: bold; margin-bottom: 2px; } .name { font-weight: bold; font-size: 9pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; } .memo { font-size: 9pt; font-weight: bold; color: #333; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; flex-grow: 1; margin-bottom: 2px; } .bottom-row { display: flex; justify-content: space-between; align-items: flex-end; font-size: 7pt; color: #333; margin-top: auto; } .enc-cost { font-weight: bold; }</style><script>window.onload = function() { window.print(); }</script></head><body><div class="page">"""
     for _ in range(start_pos - 1): html += '<div class="empty-label"></div>'
@@ -568,10 +567,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.27)
+# 🖥️ アプリ画面 (v5.28)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.27")
+st.title("🎴 ぽっけぇ～道 管理システム v5.28")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -817,22 +816,69 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価再計算", on_click=lambda: save_data(recalculate_moving_average_costs()))
 
 # =========================================================
-# 🖨️ 個別管理・ラベル
+# ✨ 🖨️ 個別管理・ラベル (UI復元版)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
-    st.header("🖨️ 個別管理・ラベル印刷"); df = load_data()
+    st.header("🖨️ 個別管理・A4ラベル印刷")
+    df = load_data()
     if not df.empty:
-        df_act = df[(df['ステータス'] == '在庫あり') & (df['在庫数'] == 1)].copy(); search_l = st.text_input("🔍 検索", key="sl"); df_act = df_act[df_act['商品名'].str.contains(search_l, na=False)]
-        if not df_act.empty:
-            df_act['印刷対象'] = False; l_ed = st.data_editor(df_act[['印刷対象', '商品名', '状態_PSA', '重量', '個別メモ', 'ID']], hide_index=True, use_container_width=True, column_config={"印刷対象": st.column_config.CheckboxColumn("印刷")})
-            if st.button("💾 保存", type="primary"):
+        # 在庫があり、かつ1点ずつ(個体管理)になっている商品だけを対象とする
+        df_act = df[(df['ステータス'] == '在庫あり') & (df['在庫数'] == 1)].copy()
+        
+        # 検索バー
+        search_l = st.text_input("🔍 商品名で検索", key="sl")
+        if search_l: 
+            df_act = df_act[df_act['商品名'].str.contains(search_l, na=False)]
+            
+        if df_act.empty: 
+            st.info("ラベル印刷の対象となる個別在庫がありません。")
+        else:
+            df_act['印刷対象'] = False
+            
+            # ステップ1
+            st.markdown("##### 📝 1. 情報の編集と印刷対象の選択")
+            l_ed = st.data_editor(
+                df_act[['印刷対象', '商品名', '状態_PSA', '重量', '個別メモ', 'ID']], 
+                hide_index=True, 
+                use_container_width=True, 
+                column_config={
+                    "印刷対象": st.column_config.CheckboxColumn("印刷", width="small"),
+                    "商品名": st.column_config.TextColumn("商品名", disabled=True),
+                    "状態_PSA": st.column_config.TextColumn("状態", disabled=True, width="small"),
+                    "重量": st.column_config.TextColumn("重量(g)"),
+                    "個別メモ": st.column_config.TextColumn("ラベル印字メモ (2行まで)"),
+                    "ID": None
+                }
+            )
+            
+            if st.button("💾 重量・メモを保存", type="primary"):
                 df_s = load_data()
-                for _, r in l_ed.iterrows(): df_s.loc[df_s['ID'] == r['ID'], '重量'], df_s.loc[df_s['ID'] == r['ID'], '個別メモ'] = r['重量'], r['個別メモ']
-                save_data(df_s); st.success("保存完了"); st.rerun()
-            st.divider(); start_pos = st.number_input("📌 開始位置 (1〜24)", min_value=1, max_value=24, value=1)
-            if not l_ed[l_ed['印刷対象']].empty:
-                items = [df_act[df_act['ID'] == r['ID']].iloc[0].to_dict() for _, r in l_ed[l_ed['印刷対象']].iterrows()]
-                st.download_button(f"📄 {len(items)}枚印刷", generate_label_html(items, start_pos), file_name="labels.html", mime="text/html", type="primary")
+                for _, r in l_ed.iterrows(): 
+                    df_s.loc[df_s['ID'] == r['ID'], '重量'] = r['重量']
+                    df_s.loc[df_s['ID'] == r['ID'], '個別メモ'] = r['個別メモ']
+                save_data(df_s)
+                st.success("保存完了！最新の状態がシールに反映されます。")
+                st.rerun()
+            
+            st.divider()
+            
+            # ステップ2 (開始位置とダウンロード)
+            st.markdown("##### 🖨️ 2. ラベル用紙への印刷 (A4・24面)")
+            start_pos = st.number_input("📌 シールの印刷開始位置 (1〜24番目)", min_value=1, max_value=24, value=1)
+            
+            # 印刷対象が1つでもチェックされていればダウンロードボタンを表示
+            sel_p = l_ed[l_ed['印刷対象'] == True]
+            if not sel_p.empty:
+                items = [df_act[df_act['ID'] == r['ID']].iloc[0].to_dict() for _, r in sel_p.iterrows()]
+                st.download_button(
+                    f"📄 {len(items)}枚のラベルHTMLをダウンロード", 
+                    generate_label_html(items, start_pos), 
+                    file_name="labels.html", 
+                    mime="text/html", 
+                    type="primary"
+                )
+            else:
+                st.button("📄 ラベルHTMLをダウンロード", disabled=True, help="上のリストで「印刷」にチェックを入れてください")
 
 # =========================================================
 # 🛍️ オリパ工場
