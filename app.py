@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.24)
+# ⚙️ 設定・定数 (v5.25 - Dynamic Condition Sniper Edition)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -26,7 +26,6 @@ SHEET_PURCHASE = '仕入帳'
 SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
 
-# バッチ処理の1回あたりの件数（タイムアウト防止のため10件程度を推奨）
 UPDATE_BATCH_SIZE = 10
 
 # ---------------------------------------------------------
@@ -459,45 +458,82 @@ def generate_search_keyword(orig_name):
     col_match = re.search(r'(\d{2,4}/\d{2,4})', cleaned)
     col_number = col_match.group(1) if col_match else ""
     for w in ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]: cleaned = cleaned.replace(w, "")
-    cleaned = re.sub(r'【.*?】|\[.*?\]|\(.*?\)|\{.*?\}', ' ', cleaned).replace('「', ' ').replace('」', ' ').replace('『', ' ').replace('』', ' ')
+    
+    # ✨ v5.25: 〔状態B〕などのカッコ自体も検索キーワードからは削ぎ落とし、純粋な名前で投網漁をする ✨
+    cleaned = re.sub(r'【.*?】|\[.*?\]|\(.*?\)|\{.*?\}|〔.*?〕', ' ', cleaned).replace('「', ' ').replace('」', ' ').replace('『', ' ').replace('』', ' ')
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    
     if is_box and "BOX" not in cleaned.upper(): cleaned += " BOX"
     if col_number and not is_box: cleaned += f" {col_number}"
     return cleaned.strip() if cleaned.strip() else orig_name.strip()
 
+# ✨ v5.25 動的状態判別（ダイナミック・スナイパー） ✨
 def get_best_match(orig_name, orig_pack, results, item_type=""):
-    ng_words, rarities = ["キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱"], ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
+    # カードラッシュ特有のキズ・状態表記
+    cond_words = ["状態A-", "状態B", "状態C", "キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱", "プレイ用"]
+    rarities = ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
+    
     orig_name_clean, orig_pack_clean = orig_name.strip().upper(), (orig_pack.strip().upper() if orig_pack else "")
+    
+    # 店長が登録した商品名の中に、状態キーワード（状態Bなど）が含まれているか確認
+    orig_conds = [cw for cw in cond_words if cw in orig_name_clean]
+    
     col_match = re.search(r'(\d{2,4}/\d{2,4})', orig_name_clean)
     orig_col_num = col_match.group(1) if col_match else ""
+    
     def extract_rarities(text):
         found = []
         for r in rarities:
             if re.search(rf'(?<![A-Z]){r}(?![A-Z])', text): found.append(r)
         return found
     orig_r, is_single, valid_results = extract_rarities(orig_name_clean), (("シングル" in item_type) or (item_type == "")), []
+    
     for res in results:
         res_name = res['name'].upper()
-        if any(ng in res_name for ng in ng_words): continue
+        res_conds = [cw for cw in cond_words if cw in res_name]
+        
+        # 🚨 状態のダイナミック判定 🚨
+        if not orig_conds:
+            # 【モードA: 美品狙い】店長の登録に状態指定がない場合は、相手にキズあり表記があれば全除外
+            if res_conds: continue
+        else:
+            # 【モードB: キズ狙い】店長がキズありを指定している場合、相手もそれを持っていなければ除外
+            if not any(c in res_name for c in orig_conds): continue
+                
         score = 0
+        if orig_conds and any(c in res_name for c in orig_conds): score += 300 # 状態も完全一致なら超高得点
+            
+        # 型番判定
         if orig_col_num:
             if orig_col_num not in res_name: continue
             else: score += 200 
+            
+        # パック略号判定
         res_pack = res.get('pack', '').upper()
         if orig_pack_clean and res_pack:
             if orig_pack_clean != res_pack: continue 
             else: score += 50
         elif orig_pack_clean and not res_pack: score -= 10 
-        clean_orig, clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}', '', orig_name_clean).strip(), re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}', '', res_name).strip()
-        score += difflib.SequenceMatcher(None, clean_orig, clean_res).ratio() * 100
+            
+        # 類似度判定（比較の邪魔になるカッコや状態キーワードを一時的に消して純粋な文字比較）
+        clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}|〔.*?〕', '', orig_name_clean).strip()
+        clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}|〔.*?〕', '', res_name).strip()
+        for cw in cond_words:
+            clean_orig = clean_orig.replace(cw, '')
+            clean_res = clean_res.replace(cw, '')
+        score += difflib.SequenceMatcher(None, clean_orig.strip(), clean_res.strip()).ratio() * 100
+        
+        # レアリティ判定
         if is_single:
             res_r = extract_rarities(res_name)
             if orig_r:
                 if any(r in res_r for r in orig_r): score += 50
                 else: continue 
             elif res_r: score -= 100 
+                
         res['final_score'] = score
         if score > 0: valid_results.append(res)
+            
     if not valid_results: return None
     valid_results.sort(key=lambda x: (-x['final_score'], x['price']))
     return valid_results[0]
@@ -557,10 +593,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.24)
+# 🖥️ アプリ画面 (v5.25)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.24")
+st.title("🎴 ぽっけぇ～道 管理システム v5.25")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -608,7 +644,6 @@ if menu == "📦 スピード仕入・解体":
                 if sort_order == "価格の高い順": display_res.sort(key=lambda x: x['price'], reverse=True)
                 elif sort_order == "価格の安い順": display_res.sort(key=lambda x: x['price'])
                 
-                # ✨ v5.24 修正ポイント：インデックス番号(i)を使って、システムIDの重複エラーを完全に回避 ✨
                 for i, item in enumerate(display_res):
                     c1, c2, c3 = st.columns([1, 3, 2])
                     with c1:
