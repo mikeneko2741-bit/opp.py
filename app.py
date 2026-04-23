@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.23)
+# ⚙️ 設定・定数 (v5.24)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -557,10 +557,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.23)
+# 🖥️ アプリ画面 (v5.24)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.23")
+st.title("🎴 ぽっけぇ～道 管理システム v5.24")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -607,18 +607,19 @@ if menu == "📦 スピード仕入・解体":
                 display_res = list(st.session_state['search_res'])
                 if sort_order == "価格の高い順": display_res.sort(key=lambda x: x['price'], reverse=True)
                 elif sort_order == "価格の安い順": display_res.sort(key=lambda x: x['price'])
-                for item in display_res:
+                
+                # ✨ v5.24 修正ポイント：インデックス番号(i)を使って、システムIDの重複エラーを完全に回避 ✨
+                for i, item in enumerate(display_res):
                     c1, c2, c3 = st.columns([1, 3, 2])
                     with c1:
-                        # ✨ v5.23 修正：三項演算子を使わず、通常のif文で展開してエラーを回避 ✨
                         if item['image']: st.image(item['image'], width=50)
                         else: st.write("🖼️")
                     with c2: st.write(f"**{item['name']}** [{item['pack']}]"); st.caption(f"相場: ¥{item['price']:,}")
                     with c3:
                         with st.popover("カートに追加"):
-                            qty = st.number_input("数量", min_value=1, value=1, key=f"q_{item['name']}")
-                            cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"c_{item['name']}")
-                            if st.button("追加", key=f"a_{item['name']}"):
+                            qty = st.number_input("数量", min_value=1, value=1, key=f"q_{i}_{item['name']}")
+                            cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封"], key=f"c_{i}_{item['name']}")
+                            if st.button("追加", key=f"a_{i}_{item['name']}"):
                                 st.session_state['cart'].append({"id": uuid.uuid4().hex[:10], "name": item['name'], "pack": item['pack'], "type": "未開封BOX" if "BOX" in item['name'].upper() else "シングルカード", "cond": cond, "qty": qty, "market_price": item['price'], "auto_update": True, "url": item.get('url', '')})
                                 st.rerun()
         with tab_manual:
@@ -638,6 +639,7 @@ if menu == "📦 スピード仕入・解体":
             sup_name, sup_qty = st.text_input("サプライ品名"), st.number_input("個数", min_value=1, value=1)
             if st.button("サプライ追加"):
                 if sup_name: st.session_state['cart'].append({"id": uuid.uuid4().hex[:10], "name": f"【サプライ】{sup_name}", "pack": "", "type": "サプライ", "cond": "-", "qty": sup_qty, "market_price": 0, "auto_update": False, "url": ""}); st.rerun()
+
     with col_right:
         total_cart_qty = sum(item['qty'] for item in st.session_state['cart'])
         st.subheader(f"② カートの中身と原価計算 (計 {total_cart_qty} 点)")
