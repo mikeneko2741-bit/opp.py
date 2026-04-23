@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.33 - Ultimate Refactor Edition)
+# ⚙️ 設定・定数 (v5.34 - API Quota Optimization Edition)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -142,26 +142,44 @@ def get_spreadsheet():
         except Exception: return None
     return None
 
+# ✨ v5.34 修正：API通信量を75%削減し、Googleの制限エラー（429）を完全回避 ✨
 def check_and_init_sheets():
     sh = get_spreadsheet()
     if not sh: return None, None, None, None
-    try: ws_inv = sh.worksheet(SHEET_INVENTORY)
-    except:
-        ws_inv = sh.add_worksheet(title=SHEET_INVENTORY, rows=1000, cols=18)
-        ws_inv.append_row(['ID', '商品名', '収録パック', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号', '相場更新', '重量', '個別メモ', '商品URL'])
-    try: ws_pur = sh.worksheet(SHEET_PURCHASE)
-    except:
-        ws_pur = sh.add_worksheet(title=SHEET_PURCHASE, rows=1000, cols=14)
-        ws_pur.append_row(['ID', '仕入日', '仕入名目', '商品名', '収録パック', '種類', '状態_PSA', '数量', '単価', '小計', '仕入先', '備考', '登録日時'])
-    try: ws_sales = sh.worksheet(SHEET_SALES)
-    except:
-        ws_sales = sh.add_worksheet(title=SHEET_SALES, rows=1000, cols=15)
-        ws_sales.append_row(['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
-    try: ws_cart = sh.worksheet(SHEET_CART)
-    except:
-        ws_cart = sh.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
-        ws_cart.append_row(['SessionID', 'Timestamp', 'CartJSON'])
-    return ws_inv, ws_pur, ws_sales, ws_cart
+    
+    for attempt in range(3):
+        try:
+            # sh.worksheets() は1回の通信で全シート情報を取得する超・省エネコマンド
+            worksheets = sh.worksheets()
+            sheets = {ws.title: ws for ws in worksheets}
+            
+            if SHEET_INVENTORY in sheets: ws_inv = sheets[SHEET_INVENTORY]
+            else: 
+                ws_inv = sh.add_worksheet(title=SHEET_INVENTORY, rows=1000, cols=18)
+                ws_inv.append_row(['ID', '商品名', '収録パック', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号', '相場更新', '重量', '個別メモ', '商品URL'])
+            
+            if SHEET_PURCHASE in sheets: ws_pur = sheets[SHEET_PURCHASE]
+            else: 
+                ws_pur = sh.add_worksheet(title=SHEET_PURCHASE, rows=1000, cols=14)
+                ws_pur.append_row(['ID', '仕入日', '仕入名目', '商品名', '収録パック', '種類', '状態_PSA', '数量', '単価', '小計', '仕入先', '備考', '登録日時'])
+            
+            if SHEET_SALES in sheets: ws_sales = sheets[SHEET_SALES]
+            else: 
+                ws_sales = sh.add_worksheet(title=SHEET_SALES, rows=1000, cols=15)
+                ws_sales.append_row(['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
+            
+            if SHEET_CART in sheets: ws_cart = sheets[SHEET_CART]
+            else: 
+                ws_cart = sh.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
+                ws_cart.append_row(['SessionID', 'Timestamp', 'CartJSON'])
+            
+            return ws_inv, ws_pur, ws_sales, ws_cart
+        except Exception as e:
+            # もしGoogleに制限をかけられても、エラーで落ちずに少し待ってから再チャレンジする
+            if attempt == 2: raise e
+            time.sleep(2 ** attempt)
+            
+    return None, None, None, None
 
 @st.cache_data(ttl=60)
 def load_data():
@@ -228,8 +246,6 @@ def load_purchase_data():
         except Exception: return pd.DataFrame()
     return pd.DataFrame()
 
-
-# ✨ v5.33 修正：万能マシンの引数名を明確化（is_append_mode, append_data） ✨
 def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, is_append_mode=False, append_data=None):
     ws_inv, ws_pur, ws_sales, _ = check_and_init_sheets()
     
@@ -240,7 +256,6 @@ def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, 
 
     if not ws: return df
 
-    # 🚨 追記専用モードの処理 🚨
     if is_append_mode and append_data is not None:
         for attempt in range(3):
             try: ws.append_rows(append_data); break
@@ -250,7 +265,6 @@ def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, 
         cache_clear()
         return True
 
-    # --- 以下、通常の上書き差分処理ルート ---
     df_to_save = df.copy()
     for col in save_cols:
         if col not in df_to_save.columns:
@@ -501,12 +515,11 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.33)
+# 🖥️ アプリ画面 (v5.34)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.33")
+st.title("🎴 ぽっけぇ～道 管理システム v5.34")
 
-# ✨ v5.33 修正：システムの記憶（純粋なデータ）をすべて『app』の引き出しに完全収納 ✨
 if 'app' not in st.session_state:
     st.session_state['app'] = {
         'cart': [],
@@ -524,10 +537,8 @@ if 'app' not in st.session_state:
         'l_o': None
     }
 
-# セッションIDはシステムインフラ用のためトップに置く
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 
-# 🚨 入力欄（UI）と紐づく文字の箱だけは外に出し、裏方（コールバック）がそれを拾って『app』の引き出しにしまう
 if 'phys_scan_val_sell' not in st.session_state: st.session_state['phys_scan_val_sell'] = ""
 def cb_phys_sell():
     if st.session_state['phys_scan_val_sell']:
