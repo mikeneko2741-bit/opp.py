@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.22 - Auto-Relay Batch Edition)
+# ⚙️ 設定・定数 (v5.23)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -557,10 +557,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.22)
+# 🖥️ アプリ画面 (v5.23)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.22")
+st.title("🎴 ぽっけぇ～道 管理システム v5.23")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -569,7 +569,6 @@ if 'reset_key' not in st.session_state: st.session_state['reset_key'] = 0
 if 'oripa_scanned' not in st.session_state: st.session_state['oripa_scanned'] = []
 if 'sell_cart' not in st.session_state: st.session_state['sell_cart'] = []
 
-# ⚡ v5.22 自動リレー更新用のステート管理
 if 'relay_update_ids' not in st.session_state: st.session_state['relay_update_ids'] = []
 if 'is_updating' not in st.session_state: st.session_state['is_updating'] = False
 
@@ -610,7 +609,10 @@ if menu == "📦 スピード仕入・解体":
                 elif sort_order == "価格の安い順": display_res.sort(key=lambda x: x['price'])
                 for item in display_res:
                     c1, c2, c3 = st.columns([1, 3, 2])
-                    with c1: st.image(item['image'], width=50) if item['image'] else st.write("🖼️")
+                    with c1:
+                        # ✨ v5.23 修正：三項演算子を使わず、通常のif文で展開してエラーを回避 ✨
+                        if item['image']: st.image(item['image'], width=50)
+                        else: st.write("🖼️")
                     with c2: st.write(f"**{item['name']}** [{item['pack']}]"); st.caption(f"相場: ¥{item['price']:,}")
                     with c3:
                         with st.popover("カートに追加"):
@@ -754,48 +756,25 @@ elif menu == "📊 在庫・PSA管理":
                 save_data(df_s); st.success("更新完了"); st.rerun()
         with tab_maint:
             st.subheader("🛠️ メンテナンス")
-            # ⚡ v5.22 自動リレー型相場更新セクション
             with st.container(border=True):
                 st.markdown("#### 🌐 最新相場の一括取得・更新 (自動リレー方式)")
-                
-                # 処理中の表示
                 if st.session_state['is_updating']:
                     pending_ids = st.session_state['relay_update_ids']
                     if not pending_ids:
-                        st.session_state['is_updating'] = False
-                        st.success("✅ 全ての更新が完了しました！")
-                        time.sleep(2); st.rerun()
+                        st.session_state['is_updating'] = False; st.success("✅ 全ての更新が完了しました！"); time.sleep(2); st.rerun()
                     else:
-                        batch = pending_ids[:UPDATE_BATCH_SIZE]
-                        st.info(f"🔄 バッチ更新中... 残り: {len(pending_ids)}件")
-                        progress_bar = st.progress(0)
-                        
-                        df_maint = load_data()
+                        batch = pending_ids[:UPDATE_BATCH_SIZE]; st.info(f"🔄 バッチ更新中... 残り: {len(pending_ids)}件"); progress_bar = st.progress(0); df_maint = load_data()
                         for i, tid in enumerate(batch):
-                            row = df_maint[df_maint['ID'] == tid].iloc[0]
-                            o_n, o_p, i_t = row['商品名'], row['収録パック'], row['種類']
-                            s_kw = generate_search_keyword(o_n)
+                            row = df_maint[df_maint['ID'] == tid].iloc[0]; o_n, o_p, i_t = row['商品名'], row['収録パック'], row['種類']; s_kw = generate_search_keyword(o_n)
                             try:
-                                results = search_card_rush(s_kw)
-                                best = get_best_match(o_n, o_p, results, i_t)
-                                if best:
-                                    mask = (df_maint['ID'] == tid)
-                                    df_maint.loc[mask, '参考相場'], df_maint.loc[mask, '商品URL'] = best['price'], best['url']
+                                results = search_card_rush(s_kw); best = get_best_match(o_n, o_p, results, i_t)
+                                if best: mask = (df_maint['ID'] == tid); df_maint.loc[mask, '参考相場'], df_maint.loc[mask, '商品URL'] = best['price'], best['url']
                             except Exception: pass
-                            progress_bar.progress((i + 1) / len(batch))
-                            time.sleep(0.5) # サーバー負荷軽減
-
-                        save_data(df_maint)
-                        st.session_state['relay_update_ids'] = pending_ids[UPDATE_BATCH_SIZE:]
-                        st.rerun() # リレー実行
-
+                            progress_bar.progress((i + 1) / len(batch)); time.sleep(0.5) 
+                        save_data(df_maint); st.session_state['relay_update_ids'] = pending_ids[UPDATE_BATCH_SIZE:]; st.rerun() 
                 if st.button("🚀 相場の一括更新を開始する (全自動)", use_container_width=True, disabled=st.session_state['is_updating']):
-                    df_target = load_data()
-                    active_on_ids = df_target[(df_target['相場更新'] == True) & (df_target['ステータス'] != '売却済み')]['ID'].tolist()
-                    if active_on_ids:
-                        st.session_state['relay_update_ids'] = active_on_ids
-                        st.session_state['is_updating'] = True
-                        st.rerun()
+                    df_target = load_data(); active_on_ids = df_target[(df_target['相場更新'] == True) & (df_target['ステータス'] != '売却済み')]['ID'].tolist()
+                    if active_on_ids: st.session_state['relay_update_ids'] = active_on_ids; st.session_state['is_updating'] = True; st.rerun()
                     else: st.info("更新対象がありません。")
 
             with st.container(border=True):
