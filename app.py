@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.29 - Download Fix Edition)
+# ⚙️ 設定・定数 (v5.30 - Generic Save Engine Edition)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -195,58 +195,6 @@ def load_data():
         except Exception: return pd.DataFrame()
     return pd.DataFrame()
 
-def save_data(df):
-    ws_inv, _, _, _ = check_and_init_sheets()
-    if not ws_inv: return df
-    save_cols = ['ID', '商品名', '収録パック', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号', '相場更新', '重量', '個別メモ', '商品URL']
-    df_to_save = df.copy()
-    for col in save_cols:
-        if col not in df_to_save.columns: df_to_save[col] = True if col == '相場更新' else ""
-    df_to_save = df_to_save[save_cols]
-    df_ex = get_as_dataframe(ws_inv, evaluate_formulas=False)
-    df_ex = df_ex.dropna(how='all')
-    if df_ex.empty:
-        df_ex = pd.DataFrame(columns=save_cols)
-        df_ex['__row'] = pd.Series(dtype=int)
-    else: df_ex['__row'] = df_ex.index + 2  
-    df_ex = df_ex.dropna(subset=['ID'])
-    df_ex = df_ex[df_ex['ID'] != '']
-    ex_cols = [c for c in save_cols if c in df_ex.columns]
-    df_ex = df_ex[['ID', '__row'] + [c for c in ex_cols if c != 'ID']]
-    merged = pd.merge(df_ex, df_to_save, on='ID', how='outer', suffixes=('_old', ''), indicator=True)
-    cells_to_update = []
-    max_row = int(df_ex['__row'].max()) if not df_ex.empty else 1
-    next_new_row = max_row + 1
-    for _, row in merged.iterrows():
-        status = row['_merge']
-        if status == 'both':
-            r = int(row['__row'])
-            for c_idx, col in enumerate(save_cols):
-                old_val, new_val = row.get(f"{col}_old", None), row[col]
-                s_old, s_new = "" if pd.isna(old_val) else str(old_val).strip(), "" if pd.isna(new_val) else str(new_val).strip()
-                try:
-                    if s_old and s_new and float(s_old) == float(s_new): continue
-                except ValueError: pass
-                if s_old.upper() == s_new.upper() and s_new.upper() in ['TRUE', 'FALSE']: continue
-                if s_old != s_new: cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value="" if pd.isna(new_val) else new_val))
-        elif status == 'right_only':
-            r = next_new_row
-            next_new_row += 1
-            for c_idx, col in enumerate(save_cols):
-                val = row[col]
-                if pd.notna(val) and val != "": cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value=val))
-        elif status == 'left_only':
-            r = int(row['__row'])
-            for c_idx in range(len(save_cols)): cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value=""))
-    if cells_to_update:
-        for attempt in range(3):
-            try: ws_inv.update_cells(cells_to_update); break
-            except Exception as e:
-                if attempt == 2: raise e
-                time.sleep(2 ** attempt)
-    load_data.clear()
-    return df_to_save
-
 @st.cache_data(ttl=60)
 def load_sales_data():
     _, _, ws_sales, _ = check_and_init_sheets()
@@ -262,54 +210,6 @@ def load_sales_data():
             return df
         except Exception: return pd.DataFrame()
     return pd.DataFrame()
-
-def save_sales_data(df):
-    _, _, ws_sales, _ = check_and_init_sheets()
-    if not ws_sales: return df
-    save_cols = ['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時']
-    df_to_save = df.copy()
-    for col in save_cols:
-        if col not in df_to_save.columns: df_to_save[col] = ""
-    df_to_save = df_to_save[save_cols]
-    df_ex = get_as_dataframe(ws_sales, evaluate_formulas=False)
-    df_ex = df_ex.dropna(how='all')
-    if df_ex.empty:
-        df_ex = pd.DataFrame(columns=save_cols)
-        df_ex['__row'] = pd.Series(dtype=int)
-    else: df_ex['__row'] = df_ex.index + 2
-    df_ex = df_ex.dropna(subset=['ID'])
-    df_ex = df_ex[df_ex['ID'] != '']
-    ex_cols = [c for c in save_cols if c in df_ex.columns]
-    df_ex = df_ex[['ID', '__row'] + [c for c in ex_cols if c != 'ID']]
-    merged = pd.merge(df_ex, df_to_save, on='ID', how='outer', suffixes=('_old', ''), indicator=True)
-    cells_to_update = []
-    max_row = int(df_ex['__row'].max()) if not df_ex.empty else 1
-    next_new_row = max_row + 1
-    for _, row in merged.iterrows():
-        status = row['_merge']
-        if status == 'both':
-            r = int(row['__row'])
-            for c_idx, col in enumerate(save_cols):
-                old_val, new_val = row.get(f"{col}_old", None), row[col]
-                s_old, s_new = "" if pd.isna(old_val) else str(old_val).strip(), "" if pd.isna(new_val) else str(new_val).strip()
-                if s_old != s_new: cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value="" if pd.isna(new_val) else new_val))
-        elif status == 'right_only':
-            r = next_new_row
-            next_new_row += 1
-            for c_idx, col in enumerate(save_cols):
-                val = row[col]
-                if pd.notna(val) and val != "": cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value=val))
-        elif status == 'left_only':
-            r = int(row['__row'])
-            for c_idx in range(len(save_cols)): cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value=""))
-    if cells_to_update:
-        for attempt in range(3):
-            try: ws_sales.update_cells(cells_to_update); break
-            except Exception as e:
-                if attempt == 2: raise e
-                time.sleep(2 ** attempt)
-    load_sales_data.clear()
-    return df_to_save
 
 @st.cache_data(ttl=60)
 def load_purchase_data():
@@ -329,15 +229,32 @@ def load_purchase_data():
         except Exception: return pd.DataFrame()
     return pd.DataFrame()
 
-def save_purchase_data(df):
-    _, ws_pur, _, _ = check_and_init_sheets()
-    if not ws_pur: return df
-    save_cols = ['ID', '仕入日', '仕入名目', '商品名', '収録パック', '種類', '状態_PSA', '数量', '単価', '小計', '仕入先', '備考', '登録日時']
+
+# ✨ v5.30 究極の整理整頓：万能保存エンジン (Generic Save Machine) ✨
+# 全てのシートの「保存」を一手に引き受ける裏方の最強マシンです
+def generic_save(df, sheet_type, save_cols, default_values=None):
+    ws_inv, ws_pur, ws_sales, _ = check_and_init_sheets()
+    
+    # 引数によって、接続するシートとリセットするキャッシュを切り替える
+    if sheet_type == 'inventory':
+        ws, cache_clear = ws_inv, load_data.clear
+    elif sheet_type == 'purchase':
+        ws, cache_clear = ws_pur, load_purchase_data.clear
+    elif sheet_type == 'sales':
+        ws, cache_clear = ws_sales, load_sales_data.clear
+    else: return df
+
+    if not ws: return df
+
     df_to_save = df.copy()
+    # 足りない列があれば、指定された「特別ルール(default_values)」で埋める。無ければ空白。
     for col in save_cols:
-        if col not in df_to_save.columns: df_to_save[col] = ""
+        if col not in df_to_save.columns:
+            df_to_save[col] = default_values[col] if (default_values and col in default_values) else ""
     df_to_save = df_to_save[save_cols]
-    df_ex = get_as_dataframe(ws_pur, evaluate_formulas=False)
+
+    # スプレッドシートの現状を取得
+    df_ex = get_as_dataframe(ws, evaluate_formulas=False)
     df_ex = df_ex.dropna(how='all')
     if df_ex.empty:
         df_ex = pd.DataFrame(columns=save_cols)
@@ -345,37 +262,66 @@ def save_purchase_data(df):
     else: df_ex['__row'] = df_ex.index + 2
     df_ex = df_ex.dropna(subset=['ID'])
     df_ex = df_ex[df_ex['ID'] != '']
+
     ex_cols = [c for c in save_cols if c in df_ex.columns]
     df_ex = df_ex[['ID', '__row'] + [c for c in ex_cols if c != 'ID']]
+
+    # 変更点（差分）の検出
     merged = pd.merge(df_ex, df_to_save, on='ID', how='outer', suffixes=('_old', ''), indicator=True)
     cells_to_update = []
     max_row = int(df_ex['__row'].max()) if not df_ex.empty else 1
     next_new_row = max_row + 1
+
     for _, row in merged.iterrows():
         status = row['_merge']
-        if status == 'both':
+        if status == 'both': # 既存の更新
             r = int(row['__row'])
             for c_idx, col in enumerate(save_cols):
                 old_val, new_val = row.get(f"{col}_old", None), row[col]
                 s_old, s_new = "" if pd.isna(old_val) else str(old_val).strip(), "" if pd.isna(new_val) else str(new_val).strip()
+                # 無駄な書き込みを防ぐ微調整
+                try:
+                    if s_old and s_new and float(s_old) == float(s_new): continue
+                except ValueError: pass
+                if s_old.upper() == s_new.upper() and s_new.upper() in ['TRUE', 'FALSE']: continue
                 if s_old != s_new: cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value="" if pd.isna(new_val) else new_val))
-        elif status == 'right_only':
+        elif status == 'right_only': # 新規追加
             r = next_new_row
             next_new_row += 1
             for c_idx, col in enumerate(save_cols):
                 val = row[col]
                 if pd.notna(val) and val != "": cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value=val))
-        elif status == 'left_only':
+        elif status == 'left_only': # 削除（空白化）
             r = int(row['__row'])
             for c_idx in range(len(save_cols)): cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value=""))
+
+    # まとめてGoogleスプレッドシートへ送信
     if cells_to_update:
         for attempt in range(3):
-            try: ws_pur.update_cells(cells_to_update); break
+            try: ws.update_cells(cells_to_update); break
             except Exception as e:
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
-    load_purchase_data.clear()
+    
+    # 書き込んだシートの記憶（キャッシュ）だけをリセット
+    cache_clear()
     return df_to_save
+
+# ✨ v5.30 受付窓口（画面からは今まで通りこの名前で呼び出されるので安全です） ✨
+def save_data(df):
+    save_cols = ['ID', '商品名', '収録パック', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号', '相場更新', '重量', '個別メモ', '商品URL']
+    # 🚨在庫特有のルール「相場更新はデフォでTrue」を万能マシンに渡す
+    return generic_save(df, 'inventory', save_cols, default_values={'相場更新': True})
+
+def save_sales_data(df):
+    save_cols = ['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時']
+    return generic_save(df, 'sales', save_cols)
+
+def save_purchase_data(df):
+    save_cols = ['ID', '仕入日', '仕入名目', '商品名', '収録パック', '種類', '状態_PSA', '数量', '単価', '小計', '仕入先', '備考', '登録日時']
+    return generic_save(df, 'purchase', save_cols)
+# ---------------------------------------------------------
+
 
 def record_purchase_items(batch_id, date, title, source, note, items):
     _, ws_pur, _, _ = check_and_init_sheets()
@@ -567,10 +513,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.29)
+# 🖥️ アプリ画面 (v5.30)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.29")
+st.title("🎴 ぽっけぇ～道 管理システム v5.30")
 
 if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
 if 'cart' not in st.session_state: st.session_state['cart'] = []
@@ -816,73 +762,39 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価再計算", on_click=lambda: save_data(recalculate_moving_average_costs()))
 
 # =========================================================
-# ✨ 🖨️ 個別管理・ラベル (UI復元・ダウンロード修正版)
+# 🖨️ 個別管理・ラベル
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
     df = load_data()
     if not df.empty:
-        # 在庫があり、かつ1点ずつ(個体管理)になっている商品だけを対象とする
         df_act = df[(df['ステータス'] == '在庫あり') & (df['在庫数'] == 1)].copy()
-        
-        # 検索バー
         search_l = st.text_input("🔍 商品名で検索", key="sl")
-        if search_l: 
-            df_act = df_act[df_act['商品名'].str.contains(search_l, na=False)]
-            
-        if df_act.empty: 
-            st.info("ラベル印刷の対象となる個別在庫がありません。")
+        if search_l: df_act = df_act[df_act['商品名'].str.contains(search_l, na=False)]
+        if df_act.empty: st.info("ラベル印刷の対象となる個別在庫がありません。")
         else:
             df_act['印刷対象'] = False
-            
-            # ステップ1
             st.markdown("##### 📝 1. 情報の編集と印刷対象の選択")
             l_ed = st.data_editor(
                 df_act[['印刷対象', '商品名', '状態_PSA', '重量', '個別メモ', 'ID']], 
-                hide_index=True, 
-                use_container_width=True, 
-                column_config={
-                    "印刷対象": st.column_config.CheckboxColumn("印刷", width="small"),
-                    "商品名": st.column_config.TextColumn("商品名", disabled=True),
-                    "状態_PSA": st.column_config.TextColumn("状態", disabled=True, width="small"),
-                    "重量": st.column_config.TextColumn("重量(g)"),
-                    "個別メモ": st.column_config.TextColumn("ラベル印字メモ (2行まで)"),
-                    "ID": None
-                }
+                hide_index=True, use_container_width=True, 
+                column_config={"印刷対象": st.column_config.CheckboxColumn("印刷", width="small"), "商品名": st.column_config.TextColumn("商品名", disabled=True), "状態_PSA": st.column_config.TextColumn("状態", disabled=True, width="small"), "重量": st.column_config.TextColumn("重量(g)"), "個別メモ": st.column_config.TextColumn("ラベル印字メモ (2行まで)"), "ID": None}
             )
-            
             if st.button("💾 重量・メモを保存", type="primary"):
                 df_s = load_data()
                 for _, r in l_ed.iterrows(): 
                     df_s.loc[df_s['ID'] == r['ID'], '重量'] = r['重量']
                     df_s.loc[df_s['ID'] == r['ID'], '個別メモ'] = r['個別メモ']
-                save_data(df_s)
-                st.success("保存完了！最新の状態がシールに反映されます。")
-                st.rerun()
-            
+                save_data(df_s); st.success("保存完了！最新の状態がシールに反映されます。"); st.rerun()
             st.divider()
-            
-            # ステップ2 (開始位置とダウンロード)
             st.markdown("##### 🖨️ 2. ラベル用紙への印刷 (A4・24面)")
             start_pos = st.number_input("📌 シールの印刷開始位置 (1〜24番目)", min_value=1, max_value=24, value=1)
-            
-            # 印刷対象が1つでもチェックされていればダウンロードボタンを表示
             sel_p = l_ed[l_ed['印刷対象'] == True]
             if not sel_p.empty:
                 items = [df_act[df_act['ID'] == r['ID']].iloc[0].to_dict() for _, r in sel_p.iterrows()]
-                
-                # ✨ v5.29: HTMLの文字列を .encode('utf-8') して明確なファイルデータに変換 ✨
                 html_data = generate_label_html(items, start_pos).encode('utf-8')
-                
-                st.download_button(
-                    label=f"📄 {len(items)}枚のラベルHTMLをダウンロード", 
-                    data=html_data,
-                    file_name="labels.html", 
-                    mime="text/html", 
-                    type="primary"
-                )
-            else:
-                st.button("📄 ラベルHTMLをダウンロード", disabled=True, help="上のリストで「印刷」にチェックを入れてください")
+                st.download_button(label=f"📄 {len(items)}枚のラベルHTMLをダウンロード", data=html_data, file_name="labels.html", mime="text/html", type="primary")
+            else: st.button("📄 ラベルHTMLをダウンロード", disabled=True, help="上のリストで「印刷」にチェックを入れてください")
 
 # =========================================================
 # 🛍️ オリパ工場
