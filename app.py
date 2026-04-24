@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.37 - BASE API Integration)
+# ⚙️ 設定・定数 (v5.39 - Security Update)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -25,17 +25,21 @@ SHEET_INVENTORY = '在庫DB'
 SHEET_PURCHASE = '仕入帳'
 SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
-SHEET_SETTINGS = 'システム設定' # 🚨 v5.37: BASEの鍵を保存する秘密のシート
+SHEET_SETTINGS = 'システム設定'
 
 UPDATE_BATCH_SIZE = 3
 
 # ---------------------------------------------------------
-# 🔔 Discord通知用エンジン
+# 🔔 Discord通知用エンジン (v5.39 修正)
 # ---------------------------------------------------------
 def send_discord_alert(message):
-    webhook_url = "https://discord.com/api/webhooks/1497217968302719017/_zeuN6fRQCdmKgGRCyLJvEsckhhvSdjS3quxBXScgPyLT9KrgWt2msdCP3HDhAVoGWfx" 
-    data = {"content": message}
     try:
+        # 🚨 StreamlitのSecrets（金庫）から安全にURLを取り出す
+        webhook_url = st.secrets.get("DISCORD_WEBHOOK_URL")
+        if not webhook_url:
+            return # URLが設定されていなければ何もしない
+            
+        data = {"content": message}
         requests.post(webhook_url, json=data, timeout=5)
     except Exception:
         pass
@@ -178,7 +182,6 @@ def check_and_init_sheets():
                 ws_cart = sh.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
                 ws_cart.append_row(['SessionID', 'Timestamp', 'CartJSON'])
             
-            # 🚨 v5.37: 設定用シートの追加
             if SHEET_SETTINGS in sheets: ws_set = sheets[SHEET_SETTINGS]
             else:
                 ws_set = sh.add_worksheet(title=SHEET_SETTINGS, rows=50, cols=2)
@@ -191,7 +194,7 @@ def check_and_init_sheets():
     return None, None, None, None, None
 
 # ---------------------------------------------------------
-# 🛒 BASE API 連携機能 (v5.37)
+# 🛒 BASE API 連携機能
 # ---------------------------------------------------------
 def load_system_settings():
     _, _, _, _, ws_set = check_and_init_sheets()
@@ -558,10 +561,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.37)
+# 🖥️ アプリ画面 (v5.39)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.37")
+st.title("🎴 ぽっけぇ～道 管理システム v5.39")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -579,7 +582,7 @@ if 'app' not in st.session_state:
         'phys_scan_pend_oripa': None,
         'l_o': None,
         'changes_detected': False,
-        'base_prices': {} # 🚨 v5.37 BASE価格キャッシュ用
+        'base_prices': {} 
     }
 
 if 'session_id' not in st.session_state: st.session_id = uuid.uuid4().hex
@@ -702,7 +705,7 @@ elif menu == "📊 在庫・PSA管理":
         tab_singles, tab_box, tab_summary, tab_psa, tab_sell, tab_edit, tab_maint = st.tabs(["🃏 シングル", "📦 BOX・素材", "📋 種類別サマリー", "💎 PSA管理", "🛒 売却レジ", "✏️ 編集", "🛠️ メンテ"])
         with tab_singles:
             df_s = df_active[(df_active['種類'] == 'シングルカード') & (~df_active['ステータス'].isin(['PSA提出中', '鑑定済み']))]; search_s = st.text_input("🔍 シングル検索", key="ss"); filtered_s = filter_dataframe(df_s, search_s)
-            st.dataframe(filtered_s[['商品URL', '商品名', '収録パック', '状態_PSA', '原価', '参考相場', '在庫数', '仕入日', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
+            st.dataframe(filtered_s[['ID', '商品URL', '商品名', '収録パック', '状態_PSA', '原価', '参考相場', '在庫数', '仕入日', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
             st.divider(); target = st.selectbox("PSA提出を選択", options=filtered_s['ID'].tolist(), format_func=lambda x: f"{filtered_s[filtered_s['ID']==x].iloc[0]['商品名']} ({x})", index=None)
             if target and st.button("✈️ PSA提出中にする"): 
                 df.loc[df['ID'] == target, 'ステータス'] = 'PSA提出中'
@@ -710,14 +713,14 @@ elif menu == "📊 在庫・PSA管理":
                 st.success("変更完了"); st.rerun()
         with tab_box:
             df_b = df_active[df_active['種類'].isin(['未開封BOX', '素材・バルク', 'オリジナルパック', '未開封パック'])]; search_b = st.text_input("🔍 BOX検索", key="sb"); filtered_b = filter_dataframe(df_b, search_b)
-            st.dataframe(filtered_b[['商品URL', '商品名', '種類', '原価', '在庫数', '参考相場', '重量', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
+            st.dataframe(filtered_b[['ID', '商品URL', '商品名', '種類', '原価', '在庫数', '参考相場', '重量', '個別メモ']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 ラッシュを開く")})
         with tab_summary:
             st.markdown("#### 📋 種類別サマリー"); df_sum_t = df_active.copy(); df_sum_t['行原価合計'] = df_sum_t['原価'] * df_sum_t['在庫数']; summary_df = df_sum_t.groupby(['種類', '商品名', '収録パック', '状態_PSA'], dropna=False).agg(総在庫数=('在庫数', 'sum'), 総原価=('行原価合計', 'sum'), 参考相場=('参考相場', 'max'), 商品URL=('商品URL', 'first')).reset_index(); summary_df['平均原価'] = (summary_df['総原価'] / summary_df['総在庫数']).fillna(0).astype(int); search_sum = st.text_input("🔍 サマリー検索", key="ssum"); filtered_summary = filter_dataframe(summary_df, search_sum)
             st.dataframe(filtered_summary[['種類', '商品URL', '商品名', '収録パック', '状態_PSA', '総在庫数', '平均原価', '総原価', '参考相場']], hide_index=True, use_container_width=True, column_config={"商品URL": st.column_config.LinkColumn("参考リンク", display_text="🔗 開く"), "平均原価": st.column_config.NumberColumn("平均原価", format="¥%d"), "総在庫数": st.column_config.NumberColumn("総在庫数", format="%d 点")})
         with tab_psa:
             c1, c2 = st.columns(2)
-            with c1: st.markdown("##### ⏳ 提出中"); st.dataframe(df_active[df_active['ステータス']=='PSA提出中'][['商品名', '在庫数', '原価']], hide_index=True)
-            with c2: st.markdown("##### ✨ 鑑定済み"); st.dataframe(df_active[df_active['ステータス']=='鑑定済み'][['商品名', '状態_PSA', 'PSA番号', '原価']], hide_index=True)
+            with c1: st.markdown("##### ⏳ 提出中"); st.dataframe(df_active[df_active['ステータス']=='PSA提出中'][['ID', '商品名', '在庫数', '原価']], hide_index=True)
+            with c2: st.markdown("##### ✨ 鑑定済み"); st.dataframe(df_active[df_active['ステータス']=='鑑定済み'][['ID', '商品名', '状態_PSA', 'PSA番号', '原価']], hide_index=True)
             st.divider(); st.markdown("##### 📥 鑑定結果登録"); psa_p = df_active[df_active['ステータス']=='PSA提出中']
             if not psa_p.empty:
                 with st.form("psa_res"):
@@ -772,7 +775,16 @@ elif menu == "📊 在庫・PSA管理":
                             df_sales_s = save_sales_data(pd.concat([df_sales_s, pd.DataFrame(records)], ignore_index=True))
                             st.session_state['app']['sell_cart'] = []; st.success(f"🎉 完了 [{receipt_id}]"); time.sleep(2); st.rerun()
         with tab_edit:
-            df_edit = df.copy(); df_edit['削除'] = False; ed = st.data_editor(df_edit[['削除', '商品名', '収録パック', '種類', '状態_PSA', '相場更新', '重量', '個別メモ', '在庫数', '原価', 'ステータス', 'ID', '商品URL']], hide_index=True, use_container_width=True, column_config={"相場更新": st.column_config.CheckboxColumn("自動更新"), "商品URL": st.column_config.LinkColumn("商品URL")})
+            df_edit = df.copy(); df_edit['削除'] = False
+            ed = st.data_editor(
+                df_edit[['削除', 'ID', '商品名', '収録パック', '種類', '状態_PSA', '相場更新', '重量', '個別メモ', '在庫数', '原価', 'ステータス', '商品URL']], 
+                hide_index=True, use_container_width=True, 
+                column_config={
+                    "相場更新": st.column_config.CheckboxColumn("自動更新"), 
+                    "商品URL": st.column_config.LinkColumn("商品URL"),
+                    "ID": st.column_config.TextColumn("ID", disabled=True)
+                }
+            )
             if st.button("💾 変更保存", type="primary"):
                 df_s = load_data(); df_s = df_s[df_s['ID'].isin(ed[~ed['削除']]['ID'].tolist())].copy()
                 for _, r in ed.iterrows():
@@ -782,21 +794,15 @@ elif menu == "📊 在庫・PSA管理":
                 st.success("更新完了"); st.rerun()
         with tab_maint:
             st.subheader("🛠️ メンテナンス")
-            
-            # 🚨 v5.37: BASE連携コントロールパネル
             settings = load_system_settings()
             with st.expander("⚙️ BASE API 連携設定"):
                 c_id = st.text_input("Client ID", value=settings.get('CLIENT_ID', ''))
                 c_sec = st.text_input("Client Secret", value=settings.get('CLIENT_SECRET', ''), type="password")
-                
-                # 新しい認証コードを発行するためのリンク
                 if c_id:
                     auth_url = f"https://api.thebase.in/1/oauth/authorize?client_id={c_id}&response_type=code&redirect_uri=https%3A%2F%2F127.0.0.1%2F&scope=read_items%20read_orders%20write_items"
                     st.markdown(f"1️⃣ [ここをクリックしてBASEの許可画面を開く]({auth_url})")
                     st.caption("※開いた後、エラー画面のアドレスバーにある `code=` の後ろの英数字をすぐにコピーしてください！")
-                
                 auth_code = st.text_input("2️⃣ コピーしたコードを貼り付け (1分以内に！)")
-                
                 if st.button("🔑 BASEと連携する", type="primary"):
                     if c_id and c_sec and auth_code:
                         url = "https://api.thebase.in/1/oauth/token"
@@ -828,7 +834,6 @@ elif menu == "📊 在庫・PSA管理":
                         progress_bar = st.progress(0)
                         df_maint = load_data()
                         
-                        # 🚨 v5.37: 更新開始時にBASEから最新の商品情報を一括取得しておく
                         base_dict = st.session_state['app'].get('base_prices', {})
                         if not base_dict and settings.get('BASE_ACCESS_TOKEN'):
                             base_items = get_base_items(settings['BASE_ACCESS_TOKEN'])
@@ -854,7 +859,6 @@ elif menu == "📊 在庫・PSA管理":
                                         if diff > 0: send_discord_alert(f"📈 **【値上がり】** {o_n}\n前回: ¥{old_price:,} ➡️ 最新: **¥{new_price:,}** (+¥{diff:,})")
                                         else: send_discord_alert(f"📉 **【値下がり】** {o_n}\n前回: ¥{old_price:,} ➡️ 最新: **¥{new_price:,}** (-¥{abs(diff):,})")
                                     
-                                    # 🚨 v5.37: BASEの出品価格との乖離チェック (商品コードにIDを入れている場合)
                                     if base_dict:
                                         matching_items = df_maint[mask]
                                         for _, m_row in matching_items.iterrows():
@@ -883,7 +887,7 @@ elif menu == "📊 在庫・PSA管理":
                         st.session_state['app']['relay_update_groups'] = unique_groups
                         st.session_state['app']['is_updating'] = True
                         st.session_state['app']['changes_detected'] = False
-                        st.session_state['app']['base_prices'] = {} # キャッシュリセット
+                        st.session_state['app']['base_prices'] = {}
                         st.rerun()
                     else: st.info("更新対象がありません。")
 
