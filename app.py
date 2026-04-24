@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.35 - Discord Alert Integration)
+# ⚙️ 設定・定数 (v5.36 - Discord Alert Update)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -29,12 +29,10 @@ SHEET_CART = 'カート下書き'
 UPDATE_BATCH_SIZE = 3
 
 # ---------------------------------------------------------
-# 🔔 Discord通知用エンジン (v5.35)
+# 🔔 Discord通知用エンジン
 # ---------------------------------------------------------
 def send_discord_alert(message):
-    # 🚨 店長のWebhook URLをセット済み
     webhook_url = "https://discord.com/api/webhooks/1497217968302719017/_zeuN6fRQCdmKgGRCyLJvEsckhhvSdjS3quxBXScgPyLT9KrgWt2msdCP3HDhAVoGWfx" 
-    
     data = {"content": message}
     try:
         requests.post(webhook_url, json=data, timeout=5)
@@ -248,7 +246,6 @@ def load_purchase_data():
             return df
         except Exception: return pd.DataFrame()
     return pd.DataFrame()
-
 
 def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, is_append_mode=False, append_data=None):
     ws_inv, ws_pur, ws_sales, _ = check_and_init_sheets()
@@ -519,10 +516,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.35)
+# 🖥️ アプリ画面 (v5.36)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.35")
+st.title("🎴 ぽっけぇ～道 管理システム v5.36")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -538,7 +535,8 @@ if 'app' not in st.session_state:
         'phys_scan_pend_sell': None,
         'l_c_ts_s': None,
         'phys_scan_pend_oripa': None,
-        'l_o': None
+        'l_o': None,
+        'changes_detected': False  # 🚨 v5.36: 変動の有無を記録するフラグを追加
     }
 
 if 'session_id' not in st.session_state: st.session_id = uuid.uuid4().hex
@@ -743,10 +741,23 @@ elif menu == "📊 在庫・PSA管理":
             st.subheader("🛠️ メンテナンス")
             with st.container(border=True):
                 st.markdown("#### 🌐 最新相場の一括取得・更新 (グループ一括更新方式)")
+                
+                # 🚨 v5.36: 更新処理のメインループ
                 if st.session_state['app']['is_updating']:
                     pending_groups = st.session_state['app']['relay_update_groups']
+                    
                     if not pending_groups:
-                        st.session_state['app']['is_updating'] = False; st.success("✅ 全ての更新が完了しました！"); time.sleep(2); st.rerun()
+                        st.session_state['app']['is_updating'] = False
+                        
+                        # 🚨 全ての更新が終わったタイミングで、全体の変動を評価して完了報告
+                        if not st.session_state['app'].get('changes_detected', False):
+                            send_discord_alert("✅ **【更新完了】**\n今回更新分では500円以上の大きな変動がありませんでした。")
+                        else:
+                            send_discord_alert("✅ **【更新完了】**\nすべての相場チェックが完了しました。")
+                            
+                        st.success("✅ 全ての更新が完了しました！")
+                        time.sleep(2)
+                        st.rerun()
                     else:
                         batch = pending_groups[:UPDATE_BATCH_SIZE]
                         st.info(f"🔄 バッチ更新中... 残り: {len(pending_groups)}種類")
@@ -761,18 +772,17 @@ elif menu == "📊 在庫・PSA管理":
                                 if best: 
                                     mask = (df_maint['商品名'] == o_n) & (df_maint['収録パック'] == o_p) & (df_maint['状態_PSA'] == o_c)
                                     
-                                    # 古い価格と原価を取得して、新しい価格と比較する準備 (v5.35)
                                     old_price = int(df_maint.loc[mask, '参考相場'].values[0])
-                                    cost_price = int(df_maint.loc[mask, '原価'].values[0])
                                     new_price = int(best['price'])
+                                    diff = new_price - old_price
 
-                                    # 🚨 Discordアラート条件A：前回より10%以上、かつ1,000円以上値上がりした時（高騰）
-                                    if new_price > old_price and (new_price - old_price) >= 1000 and new_price >= old_price * 1.1:
-                                        send_discord_alert(f"🚀 **【高騰アラート】**\n{o_n} が値上がりしました！\n前回: ¥{old_price:,} ➡️ 最新: ¥{new_price:,}")
-                                    
-                                    # 🚨 Discordアラート条件B：相場が原価を割って赤字になった時（損切り警告）
-                                    elif new_price < cost_price and old_price >= cost_price:
-                                        send_discord_alert(f"📉 **【赤字転落アラート】**\n{o_n} の相場が原価（¥{cost_price:,}）を割りました。\n現在の相場: ¥{new_price:,} （早めの売り抜けを推奨します）")
+                                    # 🚨 500円以上上下したものはすべてアナウンス
+                                    if abs(diff) >= 500:
+                                        st.session_state['app']['changes_detected'] = True # 変動があったことを記録
+                                        if diff > 0:
+                                            send_discord_alert(f"📈 **【値上がり】** {o_n}\n前回: ¥{old_price:,} ➡️ 最新: **¥{new_price:,}** (+¥{diff:,})")
+                                        else:
+                                            send_discord_alert(f"📉 **【値下がり】** {o_n}\n前回: ¥{old_price:,} ➡️ 最新: **¥{new_price:,}** (-¥{abs(diff):,})")
 
                                     df_maint.loc[mask, '参考相場'] = new_price
                                     df_maint.loc[mask, '商品URL'] = best['url']
@@ -781,6 +791,7 @@ elif menu == "📊 在庫・PSA管理":
                         df_maint = save_data(df_maint)
                         st.session_state['app']['relay_update_groups'] = pending_groups[UPDATE_BATCH_SIZE:]
                         st.rerun() 
+                        
                 if st.button("🚀 相場の一括更新を開始する (全自動)", use_container_width=True, disabled=st.session_state['app']['is_updating']):
                     df_target = load_data()
                     active_targets = df_target[(df_target['相場更新'] == True) & (df_target['ステータス'] != '売却済み')]
@@ -788,6 +799,7 @@ elif menu == "📊 在庫・PSA管理":
                         unique_groups = active_targets[['商品名', '収録パック', '種類', '状態_PSA']].drop_duplicates().to_dict('records')
                         st.session_state['app']['relay_update_groups'] = unique_groups
                         st.session_state['app']['is_updating'] = True
+                        st.session_state['app']['changes_detected'] = False # 🚨 新しい更新が始まる時にフラグをリセット
                         st.rerun()
                     else: st.info("更新対象がありません。")
 
