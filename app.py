@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.36 - Discord Alert Update)
+# ⚙️ 設定・定数 (v5.37 - BASE API Integration)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -25,6 +25,7 @@ SHEET_INVENTORY = '在庫DB'
 SHEET_PURCHASE = '仕入帳'
 SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
+SHEET_SETTINGS = 'システム設定' # 🚨 v5.37: BASEの鍵を保存する秘密のシート
 
 UPDATE_BATCH_SIZE = 3
 
@@ -155,7 +156,7 @@ def get_spreadsheet():
 
 def check_and_init_sheets():
     sh = get_spreadsheet()
-    if not sh: return None, None, None, None
+    if not sh: return None, None, None, None, None
     for attempt in range(3):
         try:
             worksheets = sh.worksheets()
@@ -176,15 +177,60 @@ def check_and_init_sheets():
             else: 
                 ws_cart = sh.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
                 ws_cart.append_row(['SessionID', 'Timestamp', 'CartJSON'])
-            return ws_inv, ws_pur, ws_sales, ws_cart
+            
+            # 🚨 v5.37: 設定用シートの追加
+            if SHEET_SETTINGS in sheets: ws_set = sheets[SHEET_SETTINGS]
+            else:
+                ws_set = sh.add_worksheet(title=SHEET_SETTINGS, rows=50, cols=2)
+                ws_set.append_row(['Key', 'Value'])
+                
+            return ws_inv, ws_pur, ws_sales, ws_cart, ws_set
         except Exception as e:
             if attempt == 2: raise e
             time.sleep(2 ** attempt)
-    return None, None, None, None
+    return None, None, None, None, None
+
+# ---------------------------------------------------------
+# 🛒 BASE API 連携機能 (v5.37)
+# ---------------------------------------------------------
+def load_system_settings():
+    _, _, _, _, ws_set = check_and_init_sheets()
+    if ws_set:
+        try:
+            records = ws_set.get_all_records()
+            return {str(row['Key']): str(row['Value']) for row in records}
+        except Exception: return {}
+    return {}
+
+def save_system_setting(key, value):
+    _, _, _, _, ws_set = check_and_init_sheets()
+    if ws_set:
+        try:
+            cell = ws_set.find(key, in_column=1)
+            ws_set.update_cell(cell.row, 2, value)
+        except Exception:
+            ws_set.append_row([key, value])
+
+def get_base_items(access_token):
+    url = "https://api.thebase.in/1/items"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    items = []
+    offset = 0
+    while True:
+        try:
+            res = requests.get(url, headers=headers, params={"limit": 100, "offset": offset}, timeout=10)
+            if res.status_code != 200: break
+            data = res.json()
+            fetched = data.get('items', [])
+            items.extend(fetched)
+            if len(fetched) < 100: break
+            offset += 100
+        except Exception: break
+    return items
 
 @st.cache_data(ttl=60)
 def load_data():
-    ws_inv, _, _, _ = check_and_init_sheets()
+    ws_inv, _, _, _, _ = check_and_init_sheets()
     if ws_inv:
         try:
             header = ws_inv.row_values(1)
@@ -215,7 +261,7 @@ def load_data():
 
 @st.cache_data(ttl=60)
 def load_sales_data():
-    _, _, ws_sales, _ = check_and_init_sheets()
+    _, _, ws_sales, _, _ = check_and_init_sheets()
     if ws_sales:
         try:
             df = get_as_dataframe(ws_sales, evaluate_formulas=True)
@@ -231,7 +277,7 @@ def load_sales_data():
 
 @st.cache_data(ttl=60)
 def load_purchase_data():
-    _, ws_pur, _, _ = check_and_init_sheets()
+    _, ws_pur, _, _, _ = check_and_init_sheets()
     if ws_pur:
         try:
             df = get_as_dataframe(ws_pur, evaluate_formulas=True)
@@ -248,13 +294,11 @@ def load_purchase_data():
     return pd.DataFrame()
 
 def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, is_append_mode=False, append_data=None):
-    ws_inv, ws_pur, ws_sales, _ = check_and_init_sheets()
-    
+    ws_inv, ws_pur, ws_sales, _, _ = check_and_init_sheets()
     if sheet_type == 'inventory': ws, cache_clear = ws_inv, load_data.clear
     elif sheet_type == 'purchase': ws, cache_clear = ws_pur, load_purchase_data.clear
     elif sheet_type == 'sales': ws, cache_clear = ws_sales, load_sales_data.clear
     else: return df
-
     if not ws: return df
 
     if is_append_mode and append_data is not None:
@@ -317,7 +361,6 @@ def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, 
             except Exception as e:
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
-    
     cache_clear()
     return df_to_save
 
@@ -334,14 +377,13 @@ def save_purchase_data(df):
     return generic_save(df=df, sheet_type='purchase', save_cols=save_cols)
 
 def record_purchase_items(batch_id, date, title, source, note, items):
-    rows, now_str = [], datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    rows, now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S'), []
     for item in items:
         rows.append([f"{batch_id}-{uuid.uuid4().hex[:6]}", date, title, item['name'], item.get('pack', ''), item['type'], item.get('cond', 'A (美品)'), item['qty'], item['unit_cost'], item['subtotal'], source, note, now_str])
-    if rows:
-        generic_save(sheet_type='purchase', is_append_mode=True, append_data=rows)
+    if rows: generic_save(sheet_type='purchase', is_append_mode=True, append_data=rows)
 
 def save_cart_draft(session_id, cart_data):
-    _, _, _, ws_cart = check_and_init_sheets()
+    _, _, _, ws_cart, _ = check_and_init_sheets()
     if ws_cart:
         now_str, cart_json = datetime.now().strftime('%Y-%m-%d %H:%M:%S'), json.dumps(cart_data, ensure_ascii=False)
         try:
@@ -350,7 +392,7 @@ def save_cart_draft(session_id, cart_data):
         except Exception: ws_cart.append_row([session_id, now_str, cart_json])
 
 def load_cart_draft(session_id):
-    _, _, _, ws_cart = check_and_init_sheets()
+    _, _, _, ws_cart, _ = check_and_init_sheets()
     if ws_cart:
         try:
             cell = ws_cart.find(session_id, in_column=1)
@@ -516,10 +558,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.36)
+# 🖥️ アプリ画面 (v5.37)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.36")
+st.title("🎴 ぽっけぇ～道 管理システム v5.37")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -536,7 +578,8 @@ if 'app' not in st.session_state:
         'l_c_ts_s': None,
         'phys_scan_pend_oripa': None,
         'l_o': None,
-        'changes_detected': False  # 🚨 v5.36: 変動の有無を記録するフラグを追加
+        'changes_detected': False,
+        'base_prices': {} # 🚨 v5.37 BASE価格キャッシュ用
     }
 
 if 'session_id' not in st.session_state: st.session_id = uuid.uuid4().hex
@@ -739,30 +782,61 @@ elif menu == "📊 在庫・PSA管理":
                 st.success("更新完了"); st.rerun()
         with tab_maint:
             st.subheader("🛠️ メンテナンス")
+            
+            # 🚨 v5.37: BASE連携コントロールパネル
+            settings = load_system_settings()
+            with st.expander("⚙️ BASE API 連携設定"):
+                c_id = st.text_input("Client ID", value=settings.get('CLIENT_ID', ''))
+                c_sec = st.text_input("Client Secret", value=settings.get('CLIENT_SECRET', ''), type="password")
+                
+                # 新しい認証コードを発行するためのリンク
+                if c_id:
+                    auth_url = f"https://api.thebase.in/1/oauth/authorize?client_id={c_id}&response_type=code&redirect_uri=https%3A%2F%2F127.0.0.1%2F&scope=read_items%20read_orders%20write_items"
+                    st.markdown(f"1️⃣ [ここをクリックしてBASEの許可画面を開く]({auth_url})")
+                    st.caption("※開いた後、エラー画面のアドレスバーにある `code=` の後ろの英数字をすぐにコピーしてください！")
+                
+                auth_code = st.text_input("2️⃣ コピーしたコードを貼り付け (1分以内に！)")
+                
+                if st.button("🔑 BASEと連携する", type="primary"):
+                    if c_id and c_sec and auth_code:
+                        url = "https://api.thebase.in/1/oauth/token"
+                        data = {"grant_type": "authorization_code", "client_id": c_id, "client_secret": c_sec, "code": auth_code, "redirect_uri": "https://127.0.0.1/"}
+                        res = requests.post(url, data=data)
+                        if res.status_code == 200:
+                            tokens = res.json()
+                            save_system_setting('CLIENT_ID', c_id)
+                            save_system_setting('CLIENT_SECRET', c_sec)
+                            save_system_setting('BASE_ACCESS_TOKEN', tokens.get('access_token', ''))
+                            save_system_setting('BASE_REFRESH_TOKEN', tokens.get('refresh_token', ''))
+                            st.success("✅ BASEとの結合に成功しました！マスターキーを保存しました。")
+                            time.sleep(2)
+                            st.rerun()
+                        else: st.error(f"❌ 連携失敗: コードの期限が切れているか、間違っています。もう一度①からやり直してください。")
+            
             with st.container(border=True):
                 st.markdown("#### 🌐 最新相場の一括取得・更新 (グループ一括更新方式)")
-                
-                # 🚨 v5.36: 更新処理のメインループ
                 if st.session_state['app']['is_updating']:
                     pending_groups = st.session_state['app']['relay_update_groups']
-                    
                     if not pending_groups:
                         st.session_state['app']['is_updating'] = False
-                        
-                        # 🚨 全ての更新が終わったタイミングで、全体の変動を評価して完了報告
-                        if not st.session_state['app'].get('changes_detected', False):
-                            send_discord_alert("✅ **【更新完了】**\n今回更新分では500円以上の大きな変動がありませんでした。")
-                        else:
-                            send_discord_alert("✅ **【更新完了】**\nすべての相場チェックが完了しました。")
-                            
-                        st.success("✅ 全ての更新が完了しました！")
-                        time.sleep(2)
-                        st.rerun()
+                        if not st.session_state['app'].get('changes_detected', False): send_discord_alert("✅ **【更新完了】**\n今回更新分では500円以上の大きな変動がありませんでした。")
+                        else: send_discord_alert("✅ **【更新完了】**\nすべての相場チェックが完了しました。")
+                        st.success("✅ 全ての更新が完了しました！"); time.sleep(2); st.rerun()
                     else:
                         batch = pending_groups[:UPDATE_BATCH_SIZE]
                         st.info(f"🔄 バッチ更新中... 残り: {len(pending_groups)}種類")
                         progress_bar = st.progress(0)
                         df_maint = load_data()
+                        
+                        # 🚨 v5.37: 更新開始時にBASEから最新の商品情報を一括取得しておく
+                        base_dict = st.session_state['app'].get('base_prices', {})
+                        if not base_dict and settings.get('BASE_ACCESS_TOKEN'):
+                            base_items = get_base_items(settings['BASE_ACCESS_TOKEN'])
+                            for item in base_items:
+                                ident = str(item.get('identifier', '')).strip()
+                                if ident: base_dict[ident] = int(item.get('price', 0))
+                            st.session_state['app']['base_prices'] = base_dict
+
                         for i, grp in enumerate(batch):
                             o_n, o_p, i_t, o_c = grp['商品名'], grp['収録パック'], grp['種類'], grp['状態_PSA']
                             s_kw = generate_search_keyword(o_n)
@@ -771,18 +845,27 @@ elif menu == "📊 在庫・PSA管理":
                                 best = get_best_match(o_n, o_p, results, i_t)
                                 if best: 
                                     mask = (df_maint['商品名'] == o_n) & (df_maint['収録パック'] == o_p) & (df_maint['状態_PSA'] == o_c)
-                                    
                                     old_price = int(df_maint.loc[mask, '参考相場'].values[0])
                                     new_price = int(best['price'])
                                     diff = new_price - old_price
 
-                                    # 🚨 500円以上上下したものはすべてアナウンス
                                     if abs(diff) >= 500:
-                                        st.session_state['app']['changes_detected'] = True # 変動があったことを記録
-                                        if diff > 0:
-                                            send_discord_alert(f"📈 **【値上がり】** {o_n}\n前回: ¥{old_price:,} ➡️ 最新: **¥{new_price:,}** (+¥{diff:,})")
-                                        else:
-                                            send_discord_alert(f"📉 **【値下がり】** {o_n}\n前回: ¥{old_price:,} ➡️ 最新: **¥{new_price:,}** (-¥{abs(diff):,})")
+                                        st.session_state['app']['changes_detected'] = True
+                                        if diff > 0: send_discord_alert(f"📈 **【値上がり】** {o_n}\n前回: ¥{old_price:,} ➡️ 最新: **¥{new_price:,}** (+¥{diff:,})")
+                                        else: send_discord_alert(f"📉 **【値下がり】** {o_n}\n前回: ¥{old_price:,} ➡️ 最新: **¥{new_price:,}** (-¥{abs(diff):,})")
+                                    
+                                    # 🚨 v5.37: BASEの出品価格との乖離チェック (商品コードにIDを入れている場合)
+                                    if base_dict:
+                                        matching_items = df_maint[mask]
+                                        for _, m_row in matching_items.iterrows():
+                                            m_id = str(m_row['ID'])
+                                            if m_id in base_dict:
+                                                b_price = base_dict[m_id]
+                                                gap = new_price - b_price
+                                                if gap >= 3000:
+                                                    send_discord_alert(f"🚨 **【BASE安売り危険！】** {o_n}\n最新相場: ¥{new_price:,} なのに BASEは **¥{b_price:,}** で出品されています！\n今すぐ値上げを検討してください！ [管理ID: {m_id}]")
+                                                elif gap <= -3000:
+                                                    send_discord_alert(f"📉 **【BASE高すぎ注意】** {o_n}\n最新相場: ¥{new_price:,} なのに BASEは **¥{b_price:,}** です。\n売れ残る可能性が高いです。 [管理ID: {m_id}]")
 
                                     df_maint.loc[mask, '参考相場'] = new_price
                                     df_maint.loc[mask, '商品URL'] = best['url']
@@ -799,7 +882,8 @@ elif menu == "📊 在庫・PSA管理":
                         unique_groups = active_targets[['商品名', '収録パック', '種類', '状態_PSA']].drop_duplicates().to_dict('records')
                         st.session_state['app']['relay_update_groups'] = unique_groups
                         st.session_state['app']['is_updating'] = True
-                        st.session_state['app']['changes_detected'] = False # 🚨 新しい更新が始まる時にフラグをリセット
+                        st.session_state['app']['changes_detected'] = False
+                        st.session_state['app']['base_prices'] = {} # キャッシュリセット
                         st.rerun()
                     else: st.info("更新対象がありません。")
 
