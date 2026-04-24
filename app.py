@@ -27,7 +27,7 @@ SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
 SHEET_SETTINGS = 'システム設定'
 
-UPDATE_BATCH_SIZE = 3
+UPDATE_BATCH_SIZE = 15
 
 # ---------------------------------------------------------
 # 🔔 Discord通知用エンジン
