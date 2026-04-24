@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.34 - API Quota Optimization Edition)
+# ⚙️ 設定・定数 (v5.35 - Discord Alert Integration)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -27,6 +27,19 @@ SHEET_SALES = '売上帳'
 SHEET_CART = 'カート下書き'
 
 UPDATE_BATCH_SIZE = 3
+
+# ---------------------------------------------------------
+# 🔔 Discord通知用エンジン (v5.35)
+# ---------------------------------------------------------
+def send_discord_alert(message):
+    # 🚨 店長のWebhook URLをセット済み
+    webhook_url = "https://discord.com/api/webhooks/1497217968302719017/_zeuN6fRQCdmKgGRCyLJvEsckhhvSdjS3quxBXScgPyLT9KrgWt2msdCP3HDhAVoGWfx" 
+    
+    data = {"content": message}
+    try:
+        requests.post(webhook_url, json=data, timeout=5)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------
 # 📷 スマホ内蔵カメラ用 QRスキャナー部品
@@ -142,43 +155,33 @@ def get_spreadsheet():
         except Exception: return None
     return None
 
-# ✨ v5.34 修正：API通信量を75%削減し、Googleの制限エラー（429）を完全回避 ✨
 def check_and_init_sheets():
     sh = get_spreadsheet()
     if not sh: return None, None, None, None
-    
     for attempt in range(3):
         try:
-            # sh.worksheets() は1回の通信で全シート情報を取得する超・省エネコマンド
             worksheets = sh.worksheets()
             sheets = {ws.title: ws for ws in worksheets}
-            
             if SHEET_INVENTORY in sheets: ws_inv = sheets[SHEET_INVENTORY]
             else: 
                 ws_inv = sh.add_worksheet(title=SHEET_INVENTORY, rows=1000, cols=18)
                 ws_inv.append_row(['ID', '商品名', '収録パック', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号', '相場更新', '重量', '個別メモ', '商品URL'])
-            
             if SHEET_PURCHASE in sheets: ws_pur = sheets[SHEET_PURCHASE]
             else: 
                 ws_pur = sh.add_worksheet(title=SHEET_PURCHASE, rows=1000, cols=14)
                 ws_pur.append_row(['ID', '仕入日', '仕入名目', '商品名', '収録パック', '種類', '状態_PSA', '数量', '単価', '小計', '仕入先', '備考', '登録日時'])
-            
             if SHEET_SALES in sheets: ws_sales = sheets[SHEET_SALES]
             else: 
                 ws_sales = sh.add_worksheet(title=SHEET_SALES, rows=1000, cols=15)
                 ws_sales.append_row(['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
-            
             if SHEET_CART in sheets: ws_cart = sheets[SHEET_CART]
             else: 
                 ws_cart = sh.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
                 ws_cart.append_row(['SessionID', 'Timestamp', 'CartJSON'])
-            
             return ws_inv, ws_pur, ws_sales, ws_cart
         except Exception as e:
-            # もしGoogleに制限をかけられても、エラーで落ちずに少し待ってから再チャレンジする
             if attempt == 2: raise e
             time.sleep(2 ** attempt)
-            
     return None, None, None, None
 
 @st.cache_data(ttl=60)
@@ -245,6 +248,7 @@ def load_purchase_data():
             return df
         except Exception: return pd.DataFrame()
     return pd.DataFrame()
+
 
 def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, is_append_mode=False, append_data=None):
     ws_inv, ws_pur, ws_sales, _ = check_and_init_sheets()
@@ -515,10 +519,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.34)
+# 🖥️ アプリ画面 (v5.35)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.34")
+st.title("🎴 ぽっけぇ～道 管理システム v5.35")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -537,7 +541,7 @@ if 'app' not in st.session_state:
         'l_o': None
     }
 
-if 'session_id' not in st.session_state: st.session_state['session_id'] = uuid.uuid4().hex
+if 'session_id' not in st.session_state: st.session_id = uuid.uuid4().hex
 
 if 'phys_scan_val_sell' not in st.session_state: st.session_state['phys_scan_val_sell'] = ""
 def cb_phys_sell():
@@ -613,10 +617,10 @@ if menu == "📦 スピード仕入・解体":
         st.subheader(f"② カートの中身と原価計算 (計 {total_cart_qty} 点)")
         c_save, c_load = st.columns(2)
         with c_save:
-            if st.button("💾 下書き保存", use_container_width=True): save_cart_draft(st.session_state['session_id'], st.session_state['app']['cart']); st.success("保存完了")
+            if st.button("💾 下書き保存", use_container_width=True): save_cart_draft(st.session_id, st.session_state['app']['cart']); st.success("保存完了")
         with c_load:
             if st.button("📥 復元", use_container_width=True):
-                draft = load_cart_draft(st.session_state['session_id'])
+                draft = load_cart_draft(st.session_id)
                 if draft: st.session_state['app']['cart'] = draft; st.rerun()
         rk = st.session_state['app']['reset_key']
         with st.container(border=True):
@@ -756,7 +760,21 @@ elif menu == "📊 在庫・PSA管理":
                                 best = get_best_match(o_n, o_p, results, i_t)
                                 if best: 
                                     mask = (df_maint['商品名'] == o_n) & (df_maint['収録パック'] == o_p) & (df_maint['状態_PSA'] == o_c)
-                                    df_maint.loc[mask, '参考相場'] = best['price']
+                                    
+                                    # 古い価格と原価を取得して、新しい価格と比較する準備 (v5.35)
+                                    old_price = int(df_maint.loc[mask, '参考相場'].values[0])
+                                    cost_price = int(df_maint.loc[mask, '原価'].values[0])
+                                    new_price = int(best['price'])
+
+                                    # 🚨 Discordアラート条件A：前回より10%以上、かつ1,000円以上値上がりした時（高騰）
+                                    if new_price > old_price and (new_price - old_price) >= 1000 and new_price >= old_price * 1.1:
+                                        send_discord_alert(f"🚀 **【高騰アラート】**\n{o_n} が値上がりしました！\n前回: ¥{old_price:,} ➡️ 最新: ¥{new_price:,}")
+                                    
+                                    # 🚨 Discordアラート条件B：相場が原価を割って赤字になった時（損切り警告）
+                                    elif new_price < cost_price and old_price >= cost_price:
+                                        send_discord_alert(f"📉 **【赤字転落アラート】**\n{o_n} の相場が原価（¥{cost_price:,}）を割りました。\n現在の相場: ¥{new_price:,} （早めの売り抜けを推奨します）")
+
+                                    df_maint.loc[mask, '参考相場'] = new_price
                                     df_maint.loc[mask, '商品URL'] = best['url']
                             except Exception: pass
                             progress_bar.progress((i + 1) / len(batch)); time.sleep(1.0) 
