@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.47 - PSA10追加版)
+# ⚙️ 設定・定数 (v5.48 - DB保存修復版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -324,10 +324,12 @@ def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, 
                 if attempt == 2: raise e
                 time.sleep(2 ** attempt)
         cache_clear(); return True
+        
     df_to_save = df.copy()
     for col in save_cols:
         if col not in df_to_save.columns: df_to_save[col] = default_values[col] if (default_values and col in default_values) else ""
     df_to_save = df_to_save[save_cols]
+    
     df_ex = get_as_dataframe(ws, evaluate_formulas=False)
     df_ex = df_ex.dropna(how='all')
     if df_ex.empty: df_ex = pd.DataFrame(columns=save_cols); df_ex['__row'] = pd.Series(dtype=int)
@@ -335,8 +337,13 @@ def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, 
     df_ex = df_ex.dropna(subset=['ID']); df_ex = df_ex[df_ex['ID'] != '']
     ex_cols = [c for c in save_cols if c in df_ex.columns]
     df_ex = df_ex[['ID', '__row'] + [c for c in ex_cols if c != 'ID']]
+    
     merged = pd.merge(df_ex, df_to_save, on='ID', how='outer', suffixes=('_old', ''), indicator=True)
     cells_to_update = []
+    
+    # 💡 修正ポイント：新しいアイテム用の行番号を計算しておく
+    next_new_row = int(df_ex['__row'].max()) + 1 if (not df_ex.empty and pd.notna(df_ex['__row'].max())) else 2
+    
     for _, row in merged.iterrows():
         status = row['_merge']
         if status == 'both': 
@@ -350,9 +357,15 @@ def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, 
                 except ValueError: pass
                 if s_old.upper() == s_new.upper() and s_new.upper() in ['TRUE', 'FALSE']: continue
                 cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value="" if pd.isna(new_val) else new_val))
+                
         elif status == 'right_only': 
-            r = 0 
-            for c_idx, col in enumerate(save_cols): pass 
+            # 💡 修正ポイント：新しく追加されたアイテムを一番下の行に書き込む
+            r = next_new_row
+            for c_idx, col in enumerate(save_cols):
+                new_val = row[col]
+                cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value="" if pd.isna(new_val) else new_val))
+            next_new_row += 1 
+            
     if cells_to_update:
         for attempt in range(3):
             try: ws.update_cells(cells_to_update); break
@@ -547,10 +560,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.47 - PSA10追加版)
+# 🖥️ アプリ画面 (v5.48 - DB保存修復版)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.47")
+st.title("🎴 ぽっけぇ～道 管理システム v5.48")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -606,22 +619,21 @@ if menu == "📦 スピード仕入・解体":
                     with c3:
                         with st.popover("カートに追加"):
                             qty = st.number_input("数量", min_value=1, value=1, key=f"q_{i}_{item['name']}")
-                            # 💡 修正箇所1: 検索結果からの追加時に「PSA10」を選べるようにしました
                             cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封", "PSA10"], key=f"c_{i}_{item['name']}")
                             if st.button("追加", key=f"a_{i}_{item['name']}"):
                                 st.session_state['app']['cart'].append({"id": uuid.uuid4().hex[:10], "name": item['name'], "pack": item['pack'], "type": "未開封BOX" if "BOX" in item['name'].upper() else "シングルカード", "cond": cond, "qty": qty, "market_price": item['price'], "auto_update": True, "url": item.get('url', '')})
                                 st.rerun()
         with tab_manual:
-            man_name, man_pack = st.text_input("商品名"), st.text_input("収録パック略号")
+            man_name, man_pack = st.text_input("商品名")
+            man_pack_input = st.text_input("収録パック略号")
             c_type, c_cond = st.columns(2)
             with c_type: man_type = st.selectbox("種類", ["シングルカード", "未開封BOX", "未開封パック", "その他"])
-            # 💡 修正箇所2: 手動登録時に「PSA10」を選べるようにしました
             with c_cond: man_cond = st.selectbox("状態", ["A (美品)", "S (完美品)", "B (傷有)", "プレイ用", "未開封", "PSA10", "-"])
             c_price, c_qty = st.columns(2)
             with c_price: man_price = st.number_input("参考相場", min_value=0, step=100)
             with c_qty: man_qty = st.number_input("数量", min_value=1, value=1)
             if st.button("✍️ 手動追加", use_container_width=True):
-                if man_name: st.session_state['app']['cart'].append({"id": uuid.uuid4().hex[:10], "name": man_name, "pack": man_pack, "type": man_type, "cond": man_cond, "qty": man_qty, "market_price": man_price, "auto_update": False, "url": ""}); st.rerun()
+                if man_name: st.session_state['app']['cart'].append({"id": uuid.uuid4().hex[:10], "name": man_name, "pack": man_pack_input, "type": man_type, "cond": man_cond, "qty": man_qty, "market_price": man_price, "auto_update": False, "url": ""}); st.rerun()
         with tab_bulk:
             bulk_type, bulk_qty = st.selectbox("素材の種類", ["【素材】SR", "【素材】AR", "【素材】RR", "【素材】CHR", "【素材】K", "【素材】汎用ノーマル"]), st.number_input("枚数", min_value=1, value=100)
             if st.button("素材追加"): st.session_state['app']['cart'].append({"id": uuid.uuid4().hex[:10], "name": bulk_type, "pack": "", "type": "素材・バルク", "cond": "プレイ用", "qty": bulk_qty, "market_price": 30, "auto_update": False, "url": ""}); st.rerun()
@@ -847,7 +859,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価再計算", on_click=recalculate_moving_average_costs)
 
 # =========================================================
-# 🖨️ 第3フェーズ：個別管理・ラベル (v5.47 完全復旧版)
+# 🖨️ 第3フェーズ：個別管理・ラベル (v5.48 完全復旧版)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -884,7 +896,7 @@ elif menu == "🖨️ 個別管理・ラベル":
             else: st.button("📄 ラベルHTMLをダウンロード", disabled=True, help="上のリストで「印刷」にチェックを入れてください")
 
 # =========================================================
-# 🛍️ 第4フェーズ：オリパ工場 (v5.47 完全復旧版)
+# 🛍️ 第4フェーズ：オリパ工場 (v5.48 完全復旧版)
 # =========================================================
 elif menu == "🛍️ オリパ工場":
     st.header("🛍️ オリパ工場"); df = load_data()
@@ -920,7 +932,7 @@ elif menu == "🛍️ オリパ工場":
                     st.session_state['app']['oripa_scanned'] = []; st.success("作成完了"); st.rerun()
 
 # =========================================================
-# 📖 第5フェーズ：帳簿・分析 (v5.47 完全復旧版)
+# 📖 第5フェーズ：帳簿・分析 (v5.48 完全復旧版)
 # =========================================================
 elif menu == "📖 帳簿・分析":
     st.header("📖 帳簿・分析")
