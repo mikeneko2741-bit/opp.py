@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.49 - 真・完全版)
+# ⚙️ 設定・定数 (v5.50 - 構造整合版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -194,22 +194,27 @@ def check_and_init_sheets():
             else: 
                 ws_inv = sh.add_worksheet(title=SHEET_INVENTORY, rows=1000, cols=18)
                 ws_inv.append_row(['ID', '商品名', '収録パック', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号', '相場更新', '重量', '個別メモ', '商品URL'])
+            
             if SHEET_PURCHASE in sheets: ws_pur = sheets[SHEET_PURCHASE]
             else: 
                 ws_pur = sh.add_worksheet(title=SHEET_PURCHASE, rows=1000, cols=14)
                 ws_pur.append_row(['ID', '仕入日', '仕入名目', '商品名', '収録パック', '種類', '状態_PSA', '数量', '単価', '小計', '仕入先', '備考', '登録日時'])
+            
             if SHEET_SALES in sheets: ws_sales = sheets[SHEET_SALES]
             else: 
                 ws_sales = sh.add_worksheet(title=SHEET_SALES, rows=1000, cols=15)
                 ws_sales.append_row(['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
+            
             if SHEET_CART in sheets: ws_cart = sheets[SHEET_CART]
             else: 
                 ws_cart = sh.add_worksheet(title=SHEET_CART, rows=1000, cols=3)
                 ws_cart.append_row(['SessionID', 'Timestamp', 'CartJSON'])
+            
             if SHEET_SETTINGS in sheets: ws_set = sheets[SHEET_SETTINGS]
             else:
                 ws_set = sh.add_worksheet(title=SHEET_SETTINGS, rows=50, cols=2)
                 ws_set.append_row(['Key', 'Value'])
+            
             return ws_inv, ws_pur, ws_sales, ws_cart, ws_set
         except Exception as e:
             if attempt == 2: raise e
@@ -390,7 +395,22 @@ def save_purchase_data(df):
 def record_purchase_items(batch_id, date, title, source, note, items):
     rows, now_str = [], datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     for item in items:
-        rows.append([f"{batch_id}-{uuid.uuid4().hex[:6]}", date, title, item['name'], item.get('pack', ''), item['type'], item.get('cond', 'A (美品)'), item['qty'], item['unit_cost'], item['subtotal'], source, note, now_str])
+        # スプレッドシートの列順序に合わせて並べる: ID, 仕入日, 名目, 商品名, パック, 種類, 状態_PSA, 数量, 単価, 小計...
+        rows.append([
+            f"{batch_id}-{uuid.uuid4().hex[:6]}", 
+            date, 
+            title, 
+            item['name'], 
+            item.get('pack', ''), 
+            item['type'], 
+            item.get('cond', 'A (美品)'), # ←ここがG列（挿入した列）に入ります
+            item['qty'], 
+            item['unit_cost'], 
+            item['subtotal'], 
+            source, 
+            note, 
+            now_str
+        ])
     if rows: generic_save(sheet_type='purchase', is_append_mode=True, append_data=rows)
 
 def save_cart_draft(session_id, cart_data):
@@ -558,10 +578,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.49 - 真・完全版)
+# 🖥️ アプリ画面 (v5.50 - 真・完全版)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.49")
+st.title("🎴 ぽっけぇ～道 管理システム v5.50")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -622,7 +642,6 @@ if menu == "📦 スピード仕入・解体":
                                 st.session_state['app']['cart'].append({"id": uuid.uuid4().hex[:10], "name": item['name'], "pack": item['pack'], "type": "未開封BOX" if "BOX" in item['name'].upper() else "シングルカード", "cond": cond, "qty": qty, "market_price": item['price'], "auto_update": True, "url": item.get('url', '')})
                                 st.rerun()
         with tab_manual:
-            # 💡 ValueErrorを修正した箇所です！
             man_name = st.text_input("商品名")
             man_pack_input = st.text_input("収録パック略号")
             c_type, c_cond = st.columns(2)
@@ -858,7 +877,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価再計算", on_click=recalculate_moving_average_costs)
 
 # =========================================================
-# 🖨️ 第3フェーズ：個別管理・ラベル (v5.49 完全復旧版)
+# 🖨️ 第3フェーズ：個別管理・ラベル (v5.50 完全整合版)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -895,7 +914,7 @@ elif menu == "🖨️ 個別管理・ラベル":
             else: st.button("📄 ラベルHTMLをダウンロード", disabled=True, help="上のリストで「印刷」にチェックを入れてください")
 
 # =========================================================
-# 🛍️ 第4フェーズ：オリパ工場 (v5.49 完全復旧版)
+# 🛍️ 第4フェーズ：オリパ工場 (v5.50 完全整合版)
 # =========================================================
 elif menu == "🛍️ オリパ工場":
     st.header("🛍️ オリパ工場"); df = load_data()
@@ -931,7 +950,7 @@ elif menu == "🛍️ オリパ工場":
                     st.session_state['app']['oripa_scanned'] = []; st.success("作成完了"); st.rerun()
 
 # =========================================================
-# 📖 第5フェーズ：帳簿・分析 (v5.49 真・完全版)
+# 📖 第5フェーズ：帳簿・分析 (v5.50 構造整合版)
 # =========================================================
 elif menu == "📖 帳簿・分析":
     st.header("📖 帳簿・分析")
