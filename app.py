@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.48 - DB保存修復版)
+# ⚙️ 設定・定数 (v5.49 - 真・完全版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -341,7 +341,6 @@ def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, 
     merged = pd.merge(df_ex, df_to_save, on='ID', how='outer', suffixes=('_old', ''), indicator=True)
     cells_to_update = []
     
-    # 💡 修正ポイント：新しいアイテム用の行番号を計算しておく
     next_new_row = int(df_ex['__row'].max()) + 1 if (not df_ex.empty and pd.notna(df_ex['__row'].max())) else 2
     
     for _, row in merged.iterrows():
@@ -359,7 +358,6 @@ def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, 
                 cells_to_update.append(gspread.Cell(row=r, col=c_idx+1, value="" if pd.isna(new_val) else new_val))
                 
         elif status == 'right_only': 
-            # 💡 修正ポイント：新しく追加されたアイテムを一番下の行に書き込む
             r = next_new_row
             for c_idx, col in enumerate(save_cols):
                 new_val = row[col]
@@ -560,10 +558,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.48 - DB保存修復版)
+# 🖥️ アプリ画面 (v5.49 - 真・完全版)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.48")
+st.title("🎴 ぽっけぇ～道 管理システム v5.49")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -624,7 +622,8 @@ if menu == "📦 スピード仕入・解体":
                                 st.session_state['app']['cart'].append({"id": uuid.uuid4().hex[:10], "name": item['name'], "pack": item['pack'], "type": "未開封BOX" if "BOX" in item['name'].upper() else "シングルカード", "cond": cond, "qty": qty, "market_price": item['price'], "auto_update": True, "url": item.get('url', '')})
                                 st.rerun()
         with tab_manual:
-            man_name, man_pack = st.text_input("商品名")
+            # 💡 ValueErrorを修正した箇所です！
+            man_name = st.text_input("商品名")
             man_pack_input = st.text_input("収録パック略号")
             c_type, c_cond = st.columns(2)
             with c_type: man_type = st.selectbox("種類", ["シングルカード", "未開封BOX", "未開封パック", "その他"])
@@ -859,7 +858,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価再計算", on_click=recalculate_moving_average_costs)
 
 # =========================================================
-# 🖨️ 第3フェーズ：個別管理・ラベル (v5.48 完全復旧版)
+# 🖨️ 第3フェーズ：個別管理・ラベル (v5.49 完全復旧版)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -896,7 +895,7 @@ elif menu == "🖨️ 個別管理・ラベル":
             else: st.button("📄 ラベルHTMLをダウンロード", disabled=True, help="上のリストで「印刷」にチェックを入れてください")
 
 # =========================================================
-# 🛍️ 第4フェーズ：オリパ工場 (v5.48 完全復旧版)
+# 🛍️ 第4フェーズ：オリパ工場 (v5.49 完全復旧版)
 # =========================================================
 elif menu == "🛍️ オリパ工場":
     st.header("🛍️ オリパ工場"); df = load_data()
@@ -932,7 +931,7 @@ elif menu == "🛍️ オリパ工場":
                     st.session_state['app']['oripa_scanned'] = []; st.success("作成完了"); st.rerun()
 
 # =========================================================
-# 📖 第5フェーズ：帳簿・分析 (v5.48 完全復旧版)
+# 📖 第5フェーズ：帳簿・分析 (v5.49 真・完全版)
 # =========================================================
 elif menu == "📖 帳簿・分析":
     st.header("📖 帳簿・分析")
