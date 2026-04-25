@@ -16,7 +16,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.50 - 構造整合版)
+# ⚙️ 設定・定数 (v5.51 - 表示クリーンアップ版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -253,6 +253,22 @@ def get_base_items(access_token):
         except Exception: break
     return items
 
+# --- お掃除エンジンの追加 ---
+def clean_display_data(df, columns):
+    """
+    データ内の 'None' や 'nan' を消去し、'1.0' などの小数を '1' に修正する関数
+    """
+    if df is None or df.empty: return df
+    for c in columns:
+        if c in df.columns:
+            # 1. 文字列に変換
+            df[c] = df[c].astype(str)
+            # 2. 不要な文字（None, nan）を消す
+            df[c] = df[c].replace({'nan': '', 'None': '', 'NaN': '', 'nan.0': ''})
+            # 3. 末尾の '.0' を消して整数らしく見せる
+            df[c] = df[c].apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x)
+    return df
+
 @st.cache_data(ttl=60)
 def load_data():
     ws_inv, _, _, _, _ = check_and_init_sheets()
@@ -270,10 +286,10 @@ def load_data():
         df = get_as_dataframe(ws_inv, evaluate_formulas=True)
         if 'ID' not in df.columns: return None
         df = df.dropna(subset=['ID']); df = df[df['ID'] != '']
-        for c in ['PSA番号', '収録パック', '重量', '個別メモ', '商品URL']:
-            if c not in df.columns: df[c] = ""
-            df[c] = df[c].astype(str).replace({'nan': '', 'None': '', 'NaN': ''})
-        if '状態_PSA' not in df.columns: df['状態_PSA'] = "A (美品)"
+        
+        # お掃除実行（重量、個別メモなどを綺麗に）
+        df = clean_display_data(df, ['PSA番号', '収録パック', '重量', '個別メモ', '商品URL', '仕入元', 'ステータス', '状態_PSA'])
+
         if '相場更新' not in df.columns: df['相場更新'] = True
         else:
             df['相場更新'] = df['相場更新'].astype(str).str.upper().map({'TRUE': True, 'FALSE': False, '1': True, '0': False})
@@ -290,9 +306,10 @@ def load_sales_data():
         df = get_as_dataframe(ws_sales, evaluate_formulas=True)
         if df.empty or 'ID' not in df.columns: return pd.DataFrame()
         df = df.dropna(subset=['ID']); df = df[df['ID'] != '']
-        if '元の在庫ID' not in df.columns: df['元の在庫ID'] = ""
-        if '収録パック' not in df.columns: df['収録パック'] = ""
-        if '状態_PSA' not in df.columns: df['状態_PSA'] = df['商品名'].astype(str).apply(lambda x: '-' if 'オリパ' in x or 'サプライ' in x else 'A (美品)')
+        
+        # お掃除実行
+        df = clean_display_data(df, ['元の在庫ID', '収録パック', '状態_PSA', '販路', '備考'])
+
         for col in ['売却数', '売上額', '手数料', '経費_送料', '純利益']: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
         return df
     except Exception: return None
@@ -305,10 +322,10 @@ def load_purchase_data():
         df = get_as_dataframe(ws_pur, evaluate_formulas=True)
         if df.empty or 'ID' not in df.columns: return pd.DataFrame()
         df = df.dropna(subset=['ID']); df = df[df['ID'] != '']
-        if '収録パック' not in df.columns: df['収録パック'] = ""
-        if '状態_PSA' not in df.columns:
-            if '種類' in df.columns: df['状態_PSA'] = df['種類'].apply(lambda x: '-' if x in ['オリジナルパック', 'サプライ'] else 'A (美品)')
-            else: df['状態_PSA'] = 'A (美品)'
+        
+        # お掃除実行
+        df = clean_display_data(df, ['収録パック', '種類', '状態_PSA', '仕入先', '備考', '仕入名目'])
+
         for col in ['数量', '単価', '小計']:
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
         return df
@@ -395,7 +412,6 @@ def save_purchase_data(df):
 def record_purchase_items(batch_id, date, title, source, note, items):
     rows, now_str = [], datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     for item in items:
-        # スプレッドシートの列順序に合わせて並べる: ID, 仕入日, 名目, 商品名, パック, 種類, 状態_PSA, 数量, 単価, 小計...
         rows.append([
             f"{batch_id}-{uuid.uuid4().hex[:6]}", 
             date, 
@@ -403,7 +419,7 @@ def record_purchase_items(batch_id, date, title, source, note, items):
             item['name'], 
             item.get('pack', ''), 
             item['type'], 
-            item.get('cond', 'A (美品)'), # ←ここがG列（挿入した列）に入ります
+            item.get('cond', 'A (美品)'), 
             item['qty'], 
             item['unit_cost'], 
             item['subtotal'], 
@@ -578,10 +594,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.50 - 真・完全版)
+# 🖥️ アプリ画面 (v5.51 - 真・完全版)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.50")
+st.title("🎴 ぽっけぇ～道 管理システム v5.51")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -877,7 +893,7 @@ elif menu == "📊 在庫・PSA管理":
             st.button("🚨 原価再計算", on_click=recalculate_moving_average_costs)
 
 # =========================================================
-# 🖨️ 第3フェーズ：個別管理・ラベル (v5.50 完全整合版)
+# 🖨️ 第3フェーズ：個別管理・ラベル (v5.51 完全整合版)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -914,7 +930,7 @@ elif menu == "🖨️ 個別管理・ラベル":
             else: st.button("📄 ラベルHTMLをダウンロード", disabled=True, help="上のリストで「印刷」にチェックを入れてください")
 
 # =========================================================
-# 🛍️ 第4フェーズ：オリパ工場 (v5.50 完全整合版)
+# 🛍️ 第4フェーズ：オリパ工場 (v5.51 完全整合版)
 # =========================================================
 elif menu == "🛍️ オリパ工場":
     st.header("🛍️ オリパ工場"); df = load_data()
@@ -950,7 +966,7 @@ elif menu == "🛍️ オリパ工場":
                     st.session_state['app']['oripa_scanned'] = []; st.success("作成完了"); st.rerun()
 
 # =========================================================
-# 📖 第5フェーズ：帳簿・分析 (v5.50 構造整合版)
+# 📖 第5フェーズ：帳簿・分析 (v5.51 構造整合版)
 # =========================================================
 elif menu == "📖 帳簿・分析":
     st.header("📖 帳簿・分析")
