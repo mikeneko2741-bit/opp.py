@@ -8,11 +8,11 @@ import traceback
 from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 店長専用・設定エリア (v8.91 アラート修正・軽量化版)
+# ⚙️ 店長専用・設定エリア (v9.0 完全一致直行モード)
 # =========================================================
 NOTIFY_THRESHOLD = 1000
 MIN_CHANGE_TO_NOTIFY = 500
@@ -79,15 +79,6 @@ def get_sheets():
     ss = client.open(SPREADSHEET_NAME)
     return ss.worksheet("在庫DB"), ss.worksheet("価格ログ")
 
-def clean_card_name(raw_name):
-    name = str(raw_name)
-    name = re.sub(r'RRR?仕様|仕様', '', name, flags=re.IGNORECASE)
-    name = re.sub(r'〔.*?〕|\[.*?\]', ' ', name)
-    name = name.replace('【', ' ').replace('】', ' ').replace('{', ' ').replace('}', ' ')
-    name = name.replace('（', ' ').replace('）', ' ').replace('(', ' ').replace(')', ' ')
-    name = re.sub(r'PSA\s*10|PSA\s*１０', '', name, flags=re.IGNORECASE)
-    return f"{re.sub(r'\s+', ' ', name).strip()} PSA10"
-
 def parse_snkrdunk_date(date_str, now):
     try:
         if "秒前" in date_str: return now - timedelta(seconds=int(re.search(r'\d+', date_str).group()))
@@ -114,8 +105,8 @@ def filter_abnormal_prices(prices_list):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 スマート巡回ロボ v8.91 起動...")
-    print("🚀 [軽量化モード有効] 画像読み込みスキップ＆動的待機")
+    print("🤖 ぽっけぇ〜道 スマート巡回ロボ v9.0 起動...")
+    print("🚀 [完全一致モード] スニダンURL直行版")
     print("===========================================")
     
     if not BASE_CLIENT_ID or not DISCORD_WEBHOOK_URL:
@@ -131,21 +122,32 @@ def run_robot():
     except Exception as e:
         print(f"❌ 初期化失敗: {e}"); return
 
+    # 💡 シートの列位置を動的に特定（アプリで列が増えても壊れない防衛策）
+    header = db_sheet.row_values(1)
+    if "BASE販売価格" not in header:
+        base_price_col = len(header) + 1
+        db_sheet.update_cell(1, base_price_col, "BASE販売価格")
+    else:
+        base_price_col = header.index("BASE販売価格") + 1
+
     targets = []
     for idx, row in enumerate(records):
         item_id = str(row.get('ID', ''))
+        snkrdunk_url = str(row.get('スニダンURL', '')).strip()
+        
         if item_id in base_prices:
             new_p = base_prices[item_id]
             if str(row.get('BASE販売価格')) != str(new_p):
-                try: db_sheet.update_cell(idx + 2, 17, new_p)
+                try: db_sheet.update_cell(idx + 2, base_price_col, new_p)
                 except: pass
                 
-            if row.get('ステータス') != '売却済み' and '10' in str(row.get('状態_PSA')):
+            # 🚨 監視条件: ステータス稼働中 ＋ PSA10 ＋ スニダンURLが存在すること
+            if row.get('ステータス') != '売却済み' and '10' in str(row.get('状態_PSA')) and snkrdunk_url.startswith('http'):
                 last_log = next((l for l in reversed(log_data) if str(l.get('ID')) == item_id), None)
-                targets.append({"row_index": idx + 2, "id": item_id, "name": row.get('商品名'), "search_word": clean_card_name(row.get('商品名')), "base_price": int(new_p), "last_log": last_log})
+                targets.append({"row_index": idx + 2, "id": item_id, "name": row.get('商品名'), "snkrdunk_url": snkrdunk_url, "base_price": int(new_p), "last_log": last_log})
 
-    if not targets: print("✅ 対象なし"); return
-    send_discord(f"🔍 **スマート巡回開始** ({len(targets)}件)")
+    if not targets: print("✅ URLが設定された監視対象カードはありません。"); return
+    send_discord(f"🔍 **スマート巡回開始** (直行モード: {len(targets)}件)")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=(not SHOW_BROWSER))
@@ -160,39 +162,21 @@ def run_robot():
         
         page = context.new_page()
         now = datetime.now()
-        item_selector = 'a[href*="/apparels/"]:not([href*="/used/"]), a[href*="/products/"]:not([href*="/used/"])'
 
         for t in targets:
-            print(f"\n➡️ 調査: {t['search_word']}")
-            scraped_url, page_text = "", ""
+            scraped_url = t['snkrdunk_url']
+            print(f"\n➡️ 調査: {t['name']}")
+            print(f"  🔗 直行URL: {scraped_url}")
+            page_text = ""
             
             for attempt in range(MAX_RETRIES):
                 try:
-                    search_kw = t['search_word'].replace(" PSA10", "").strip()
-                    page.goto(f"https://snkrdunk.com/search?keywords={quote_plus(search_kw)}", timeout=45000, wait_until="domcontentloaded")
-                    
-                    try: page.wait_for_selector(item_selector, state="visible", timeout=8000)
+                    page.goto(scraped_url, timeout=45000, wait_until="domcontentloaded")
+                    try: page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=10000)
                     except: pass
                     
-                    items = page.locator(item_selector)
-                    
-                    if items.count() == 0:
-                        simple_kw = re.sub(r'\d+/\d+|\d+', '', search_kw).strip()  
-                        print(f"  ⚠️ 検索結果なし → 簡易キーワード '{simple_kw}' で再試行")
-                        page.goto(f"https://snkrdunk.com/search?keywords={quote_plus(simple_kw)}", timeout=45000, wait_until="domcontentloaded")
-                        try: page.wait_for_selector(item_selector, state="visible", timeout=8000)
-                        except: pass
-                        items = page.locator(item_selector)
-
-                    if items.count() > 0:
-                        items.first.click()
-                        try: page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=10000)
-                        except: pass
-                        
-                        scraped_url = page.url
-                        print(f"  🔗 取得URL: {scraped_url}")
-                        page_text = page.locator("body").inner_text()
-                        break 
+                    page_text = page.locator("body").inner_text()
+                    break 
                 except Exception as e:
                     print(f"  🐢 エラー・タイムアウト (試行 {attempt+1}/{MAX_RETRIES}): {e}")
                     if attempt < MAX_RETRIES - 1: time.sleep(5)
@@ -242,9 +226,7 @@ def run_robot():
 
             base_gap = abs(current_val - t['base_price'])
             if base_gap >= NOTIFY_THRESHOLD and price_diff >= MIN_CHANGE_TO_NOTIFY:
-                # 💡【修正】文字列のフォーマットを事前に整えることでエラーを回避
                 avg_24h_str = f"¥{avg_24h:,}" if avg_24h is not None else "---"
-                
                 msg = (f"🔔 **【{trend}{hot_mark}】価格アラート**\n**{t['name']}**\n"
                        f"BASE価格: ¥{t['base_price']:,}\n"
                        f"--- 📊 相場データ ---\n"
@@ -256,11 +238,10 @@ def run_robot():
                        f"🔗 **確認用URL:** {scraped_url}")
                 send_discord(msg)
             
-            # ランダム待機 (3〜6秒)
             time.sleep(random.uniform(3, 6))
 
         browser.close()
-        send_discord("✅ **スマート巡回完了**")
+        send_discord("✅ **スマート巡回完了 (URL直行)**")
         print("\n🏁 全巡回完了")
 
 if __name__ == "__main__":
