@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.52 - お掃除エンジン完全版)
+# ⚙️ 設定・定数 (v5.53 - PSA防衛ライン搭載版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -254,22 +254,14 @@ def get_base_items(access_token):
         except Exception: break
     return items
 
-# ---------------------------------------------------------
-# 🧹 【修正版】お掃除エンジン
-# ---------------------------------------------------------
 def clean_display_data(df, columns):
     if df is None or df.empty: return df
     for c in columns:
         if c in df.columns:
-            # 強制的に文字列化してから末尾の .0 を削る（floatエラーを完全回避）
             df[c] = df[c].apply(lambda x: str(x)[:-2] if str(x).endswith('.0') else str(x))
-            # 残った nan などの不要な文字を消去
             df[c] = df[c].replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''})
     return df
 
-# ---------------------------------------------------------
-# 🚨 データ読み込みエンジン
-# ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data():
     ws_inv, _, _, _, _ = check_and_init_sheets()
@@ -492,56 +484,102 @@ def generate_label_html(items, start_pos=1):
     return html
 
 def clean_product_name(text): return re.sub(r'\{-}.*$', '', str(text)).strip()
+
+# ---------------------------------------------------------
+# 🛡️ 【修正】PSA防衛ライン搭載の検索キーワード生成
+# ---------------------------------------------------------
 def generate_search_keyword(orig_name):
-    is_box, cleaned = ("BOX" in orig_name.upper() or "ｂｏｘ" in orig_name.lower()), str(orig_name)
-    col_match = re.search(r'(\d{2,4}/\d{2,4})', cleaned); col_number = col_match.group(1) if col_match else ""
-    for w in ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]: cleaned = cleaned.replace(w, "")
+    is_box = ("BOX" in orig_name.upper() or "ｂｏｘ" in orig_name.lower())
+    # 商品名にPSAが含まれているかチェック
+    is_psa = bool(re.search(r'PSA', orig_name, re.IGNORECASE)) 
+    cleaned = str(orig_name)
+    
+    col_match = re.search(r'(\d{2,4}/\d{2,4})', cleaned)
+    col_number = col_match.group(1) if col_match else ""
+    
+    for w in ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]: 
+        cleaned = cleaned.replace(w, "")
+        
     cleaned = re.sub(r'【.*?】|\[.*?\]|\(.*?\)|\{.*?\}|〔.*?〕', ' ', cleaned).replace('「', ' ').replace('」', ' ').replace('『', ' ').replace('』', ' ')
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    
     if is_box and "BOX" not in cleaned.upper(): cleaned += " BOX"
     if col_number and not is_box: cleaned += f" {col_number}"
+    # PSA品なら検索キーワードの最後に強制的に PSA10 を追加
+    if is_psa: cleaned += " PSA10"
+    
     return cleaned.strip()
 
+# ---------------------------------------------------------
+# 🛡️ 【修正】PSA防衛ライン搭載のマッチング判定
+# ---------------------------------------------------------
 def get_best_match(orig_name, orig_pack, results, item_type=""):
     cond_words = ["状態A-", "状態B", "状態C", "キズ", "傷", "イタミ", "ダメージ", "シュリンクなし", "シュリンク破れ", "特価", "難あり", "訳あり", "ジャンク", "開封済", "アウトレット", "外箱", "空箱", "プレイ用"]
     rarities = ["SAR", "SR", "UR", "HR", "AR", "CSR", "CHR", "SA", "TR", "SSR", "K"]
-    orig_name_clean, orig_pack_clean = orig_name.strip().upper(), (orig_pack.strip().upper() if orig_pack else "")
+    
+    orig_name_clean = orig_name.strip().upper()
+    orig_pack_clean = orig_pack.strip().upper() if orig_pack else ""
     orig_conds = [cw for cw in cond_words if cw in orig_name_clean]
-    col_match = re.search(r'(\d{2,4}/\d{2,4})', orig_name_clean); orig_col_num = col_match.group(1) if col_match else ""
+    col_match = re.search(r'(\d{2,4}/\d{2,4})', orig_name_clean)
+    orig_col_num = col_match.group(1) if col_match else ""
+    
+    # オリジナルがPSAかどうかの判定フラグ
+    is_orig_psa = "PSA" in orig_name_clean
+    
     def extract_rarities(text):
         found = []
         for r in rarities:
             if re.search(rf'(?<![A-Z]){r}(?![A-Z])', text): found.append(r)
         return found
-    orig_r, is_single, valid_results = extract_rarities(orig_name_clean), (("シングル" in item_type) or (item_type == "")), []
+        
+    orig_r = extract_rarities(orig_name_clean)
+    is_single = (("シングル" in item_type) or (item_type == ""))
+    valid_results = []
+    
     for res in results:
-        res_name = res['name'].upper(); res_conds = [cw for cw in cond_words if cw in res_name]
+        res_name = res['name'].upper()
+        
+        # 🚨 【重要】PSAのミスマッチを弾く防衛線
+        is_res_psa = "PSA" in res_name
+        if is_orig_psa and not is_res_psa: continue # PSA品なのに生カードを拾おうとしたらスキップ
+        if not is_orig_psa and is_res_psa: continue # 生カードなのにPSA品を拾おうとしたらスキップ
+        
+        res_conds = [cw for cw in cond_words if cw in res_name]
         if not orig_conds:
             if res_conds: continue
         else:
             if not any(c in res_name for c in orig_conds): continue
+            
         score = 0
         if orig_conds and any(c in res_name for c in orig_conds): score += 300 
         if orig_col_num:
             if orig_col_num not in res_name: continue
             else: score += 200 
+            
         res_pack = res.get('pack', '').upper()
         if orig_pack_clean and res_pack:
             if orig_pack_clean != res_pack: continue 
             else: score += 50
         elif orig_pack_clean and not res_pack: score -= 10 
+        
         clean_orig = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}|〔.*?〕', '', orig_name_clean).strip()
         clean_res = re.sub(r'\[.*?\]|\(.*?\)|【.*?】|\{.*?\}|〔.*?〕', '', res_name).strip()
-        for cw in cond_words: clean_orig, clean_res = clean_orig.replace(cw, ''), clean_res.replace(cw, '')
+        for cw in cond_words: 
+            clean_orig = clean_orig.replace(cw, '')
+            clean_res = clean_res.replace(cw, '')
+            
         score += difflib.SequenceMatcher(None, clean_orig, clean_res).ratio() * 100
+        
         if is_single:
             res_r = extract_rarities(res_name)
             if orig_r:
                 if any(r in res_r for r in orig_r): score += 50
                 else: continue 
             elif res_r: score -= 100 
+            
         res['final_score'] = score
         if score > 0: valid_results.append(res)
+        
     if not valid_results: return None
     valid_results.sort(key=lambda x: (-x['final_score'], x['price']))
     return valid_results[0]
@@ -600,10 +638,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.52 - デバッグ強化版)
+# 🖥️ アプリ画面 (v5.53 - PSA防衛ライン搭載版)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.52")
+st.title("🎴 ぽっけぇ～道 管理システム v5.53")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
