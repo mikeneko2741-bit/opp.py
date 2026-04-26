@@ -12,7 +12,7 @@ from urllib.parse import quote_plus, urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 店長専用・設定エリア (v8.9 超軽量・爆速版)
+# ⚙️ 店長専用・設定エリア (v8.91 アラート修正・軽量化版)
 # =========================================================
 NOTIFY_THRESHOLD = 1000
 MIN_CHANGE_TO_NOTIFY = 500
@@ -114,7 +114,7 @@ def filter_abnormal_prices(prices_list):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 スマート巡回ロボ v8.9 起動...")
+    print("🤖 ぽっけぇ〜道 スマート巡回ロボ v8.91 起動...")
     print("🚀 [軽量化モード有効] 画像読み込みスキップ＆動的待機")
     print("===========================================")
     
@@ -151,7 +151,6 @@ def run_robot():
         browser = p.chromium.launch(headless=(not SHOW_BROWSER))
         context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36", viewport={'width': 1280, 'height': 800})
         
-        # 🚀 【軽量化の柱①】画像・メディア・フォントの通信をブロック（JS/CSSは通してボット検知を回避）
         def block_heavy_resources(route):
             if route.request.resource_type in ["image", "media", "font"]:
                 route.abort()
@@ -170,10 +169,8 @@ def run_robot():
             for attempt in range(MAX_RETRIES):
                 try:
                     search_kw = t['search_word'].replace(" PSA10", "").strip()
-                    # 🚀 【軽量化の柱②】networkidleを廃止。画面の骨組み(DOM)ができたら即座に次へ
                     page.goto(f"https://snkrdunk.com/search?keywords={quote_plus(search_kw)}", timeout=45000, wait_until="domcontentloaded")
                     
-                    # 🚀 【軽量化の柱③】固定sleepを廃止。要素が出現するまで最大8秒待機（出たら即次へ）
                     try: page.wait_for_selector(item_selector, state="visible", timeout=8000)
                     except: pass
                     
@@ -189,7 +186,6 @@ def run_robot():
 
                     if items.count() > 0:
                         items.first.click()
-                        # 🚀 クリック後もnetworkidleと固定sleepを廃止。履歴が出現したら即座にテキスト抽出
                         try: page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=10000)
                         except: pass
                         
@@ -246,18 +242,21 @@ def run_robot():
 
             base_gap = abs(current_val - t['base_price'])
             if base_gap >= NOTIFY_THRESHOLD and price_diff >= MIN_CHANGE_TO_NOTIFY:
+                # 💡【修正】文字列のフォーマットを事前に整えることでエラーを回避
+                avg_24h_str = f"¥{avg_24h:,}" if avg_24h is not None else "---"
+                
                 msg = (f"🔔 **【{trend}{hot_mark}】価格アラート**\n**{t['name']}**\n"
                        f"BASE価格: ¥{t['base_price']:,}\n"
                        f"--- 📊 相場データ ---\n"
                        f"直近平均: **¥{current_val:,}** (10件)\n"
-                       f"24h平均: ¥{avg_24h if avg_24h else '---' :,} ({count_24h}件成約)\n"
+                       f"24h平均: {avg_24h_str} ({count_24h}件成約)\n"
                        f"価格幅: ¥{min_p:,} 〜 ¥{max_p:,}\n"
                        f"--- 乖離状況 ---\n"
                        f"乖離: ¥{base_gap:,} (前回比: {'+' if current_val > last_avg else ''}{current_val - last_avg:,})\n"
                        f"🔗 **確認用URL:** {scraped_url}")
                 send_discord(msg)
             
-            # ランダム待機 (3〜6秒へ微調整し、スピードアップ)
+            # ランダム待機 (3〜6秒)
             time.sleep(random.uniform(3, 6))
 
         browser.close()
