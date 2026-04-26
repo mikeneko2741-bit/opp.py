@@ -11,12 +11,13 @@ import time
 import json
 import gspread
 import difflib
+import traceback  # エラー詳細表示用に追加
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.51 - 表示クリーンアップ版)
+# ⚙️ 設定・定数 (v5.51 - デバッグ強化版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -253,26 +254,24 @@ def get_base_items(access_token):
         except Exception: break
     return items
 
-# --- お掃除エンジンの追加 ---
 def clean_display_data(df, columns):
-    """
-    データ内の 'None' や 'nan' を消去し、'1.0' などの小数を '1' に修正する関数
-    """
     if df is None or df.empty: return df
     for c in columns:
         if c in df.columns:
-            # 1. 文字列に変換
             df[c] = df[c].astype(str)
-            # 2. 不要な文字（None, nan）を消す
             df[c] = df[c].replace({'nan': '', 'None': '', 'NaN': '', 'nan.0': ''})
-            # 3. 末尾の '.0' を消して整数らしく見せる
             df[c] = df[c].apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x)
     return df
 
+# ---------------------------------------------------------
+# 🚨 デバッグ強化版データ読み込みエンジン
+# ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data():
     ws_inv, _, _, _, _ = check_and_init_sheets()
-    if not ws_inv: return None
+    if not ws_inv:
+        st.error("❌ スプレッドシートに接続できません。鍵(secrets.json)が無いか、権限エラーです。")
+        return None
     try:
         header = ws_inv.row_values(1)
         if not header: return None
@@ -284,10 +283,13 @@ def load_data():
             try: ws_inv.update_cells(updates)
             except Exception: ws_inv.add_cols(5); ws_inv.update_cells(updates)
         df = get_as_dataframe(ws_inv, evaluate_formulas=True)
-        if 'ID' not in df.columns: return None
-        df = df.dropna(subset=['ID']); df = df[df['ID'] != '']
         
-        # お掃除実行（重量、個別メモなどを綺麗に）
+        # エラー検証
+        if 'ID' not in df.columns:
+            st.error("❌ 在庫DBのA列に『ID』という見出しが見つかりません。")
+            return None
+            
+        df = df.dropna(subset=['ID']); df = df[df['ID'] != '']
         df = clean_display_data(df, ['PSA番号', '収録パック', '重量', '個別メモ', '商品URL', '仕入元', 'ステータス', '状態_PSA'])
 
         if '相場更新' not in df.columns: df['相場更新'] = True
@@ -296,7 +298,11 @@ def load_data():
             df['相場更新'] = df['相場更新'].fillna(True).astype(bool)
         for c in ['原価', '参考相場', '在庫数']: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int)
         return df
-    except Exception: return None
+    except Exception as e:
+        # 🚨 ここでエラーの全貌を画面に表示します
+        st.error(f"❌ データの読み込み中にプログラムエラーが発生しました: {e}")
+        st.code(traceback.format_exc())
+        return None
 
 @st.cache_data(ttl=60)
 def load_sales_data():
@@ -306,10 +312,7 @@ def load_sales_data():
         df = get_as_dataframe(ws_sales, evaluate_formulas=True)
         if df.empty or 'ID' not in df.columns: return pd.DataFrame()
         df = df.dropna(subset=['ID']); df = df[df['ID'] != '']
-        
-        # お掃除実行
         df = clean_display_data(df, ['元の在庫ID', '収録パック', '状態_PSA', '販路', '備考'])
-
         for col in ['売却数', '売上額', '手数料', '経費_送料', '純利益']: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
         return df
     except Exception: return None
@@ -322,10 +325,7 @@ def load_purchase_data():
         df = get_as_dataframe(ws_pur, evaluate_formulas=True)
         if df.empty or 'ID' not in df.columns: return pd.DataFrame()
         df = df.dropna(subset=['ID']); df = df[df['ID'] != '']
-        
-        # お掃除実行
         df = clean_display_data(df, ['収録パック', '種類', '状態_PSA', '仕入先', '備考', '仕入名目'])
-
         for col in ['数量', '単価', '小計']:
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
         return df
@@ -594,7 +594,7 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.51 - 真・完全版)
+# 🖥️ アプリ画面 (v5.51 - デバッグ強化版)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
 st.title("🎴 ぽっけぇ～道 管理システム v5.51")
