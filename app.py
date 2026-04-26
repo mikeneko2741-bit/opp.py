@@ -11,13 +11,13 @@ import time
 import json
 import gspread
 import difflib
-import traceback  # エラー詳細表示用に追加
+import traceback
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.51 - デバッグ強化版)
+# ⚙️ 設定・定数 (v5.52 - お掃除エンジン完全版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -254,17 +254,21 @@ def get_base_items(access_token):
         except Exception: break
     return items
 
+# ---------------------------------------------------------
+# 🧹 【修正版】お掃除エンジン
+# ---------------------------------------------------------
 def clean_display_data(df, columns):
     if df is None or df.empty: return df
     for c in columns:
         if c in df.columns:
-            df[c] = df[c].astype(str)
-            df[c] = df[c].replace({'nan': '', 'None': '', 'NaN': '', 'nan.0': ''})
-            df[c] = df[c].apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x)
+            # 強制的に文字列化してから末尾の .0 を削る（floatエラーを完全回避）
+            df[c] = df[c].apply(lambda x: str(x)[:-2] if str(x).endswith('.0') else str(x))
+            # 残った nan などの不要な文字を消去
+            df[c] = df[c].replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''})
     return df
 
 # ---------------------------------------------------------
-# 🚨 デバッグ強化版データ読み込みエンジン
+# 🚨 データ読み込みエンジン
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data():
@@ -284,7 +288,6 @@ def load_data():
             except Exception: ws_inv.add_cols(5); ws_inv.update_cells(updates)
         df = get_as_dataframe(ws_inv, evaluate_formulas=True)
         
-        # エラー検証
         if 'ID' not in df.columns:
             st.error("❌ 在庫DBのA列に『ID』という見出しが見つかりません。")
             return None
@@ -299,7 +302,6 @@ def load_data():
         for c in ['原価', '参考相場', '在庫数']: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int)
         return df
     except Exception as e:
-        # 🚨 ここでエラーの全貌を画面に表示します
         st.error(f"❌ データの読み込み中にプログラムエラーが発生しました: {e}")
         st.code(traceback.format_exc())
         return None
@@ -315,7 +317,9 @@ def load_sales_data():
         df = clean_display_data(df, ['元の在庫ID', '収録パック', '状態_PSA', '販路', '備考'])
         for col in ['売却数', '売上額', '手数料', '経費_送料', '純利益']: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
         return df
-    except Exception: return None
+    except Exception as e:
+        st.error(f"❌ 売上帳エラー: {e}"); st.code(traceback.format_exc())
+        return None
 
 @st.cache_data(ttl=60)
 def load_purchase_data():
@@ -329,7 +333,9 @@ def load_purchase_data():
         for col in ['数量', '単価', '小計']:
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
         return df
-    except Exception: return None
+    except Exception as e:
+        st.error(f"❌ 仕入帳エラー: {e}"); st.code(traceback.format_exc())
+        return None
 
 def generic_save(df=None, sheet_type=None, save_cols=None, default_values=None, is_append_mode=False, append_data=None):
     if df is None and not is_append_mode: return None
@@ -594,10 +600,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.51 - デバッグ強化版)
+# 🖥️ アプリ画面 (v5.52 - デバッグ強化版)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.51")
+st.title("🎴 ぽっけぇ～道 管理システム v5.52")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
