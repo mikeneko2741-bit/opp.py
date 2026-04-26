@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v9.1 列位置自動特定・直行モード版)
+# ⚙️ 設定エリア (v9.2 共有鍵・相場同期版)
 # =========================================================
 NOTIFY_THRESHOLD = 1000
 MIN_CHANGE_TO_NOTIFY = 500
@@ -37,9 +37,6 @@ def load_api_keys():
 
 API_KEYS = load_api_keys()
 DISCORD_WEBHOOK_URL = API_KEYS.get("DISCORD_WEBHOOK_URL", "")
-BASE_CLIENT_ID = API_KEYS.get("BASE_CLIENT_ID", "")
-BASE_CLIENT_SECRET = API_KEYS.get("BASE_CLIENT_SECRET", "")
-BASE_REFRESH_TOKEN = API_KEYS.get("BASE_REFRESH_TOKEN", "")
 
 def send_discord(message):
     if not DISCORD_WEBHOOK_URL: return
@@ -48,12 +45,31 @@ def send_discord(message):
     try: urllib.request.urlopen(req, timeout=5)
     except Exception as e: print(f"    ❌ Discord送信エラー: {e}")
 
-def get_base_access_token():
+# 💡 BASEトークンの更新と、スプレッドシートへの書き戻し
+def refresh_base_token(ws_set, client_id, client_secret, refresh_token):
     url = "https://api.thebase.in/1/oauth/token"
-    params = {"grant_type": "refresh_token", "client_id": BASE_CLIENT_ID, "client_secret": BASE_CLIENT_SECRET, "refresh_token": BASE_REFRESH_TOKEN}
+    params = {"grant_type": "refresh_token", "client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token}
     req = urllib.request.Request(url, data=urlencode(params).encode(), method="POST")
-    with urllib.request.urlopen(req) as res:
-        return json.load(res)["access_token"]
+    try:
+        with urllib.request.urlopen(req) as res:
+            tokens = json.load(res)
+            access_token = tokens.get("access_token", "")
+            new_refresh_token = tokens.get("refresh_token", "")
+            if access_token:
+                try:
+                    cell_a = ws_set.find("BASE_ACCESS_TOKEN", in_column=1)
+                    ws_set.update_cell(cell_a.row, 2, access_token)
+                except gspread.exceptions.CellNotFound:
+                    ws_set.append_row(["BASE_ACCESS_TOKEN", access_token])
+                try:
+                    cell_r = ws_set.find("BASE_REFRESH_TOKEN", in_column=1)
+                    ws_set.update_cell(cell_r.row, 2, new_refresh_token)
+                except gspread.exceptions.CellNotFound:
+                    ws_set.append_row(["BASE_REFRESH_TOKEN", new_refresh_token])
+            return access_token
+    except Exception as e:
+        print(f"❌ BASE API トークン更新エラー: {e}")
+        return ""
 
 def get_base_items_prices(access_token):
     base_prices = {}
@@ -93,37 +109,57 @@ def filter_abnormal_prices(prices_list):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 スマート巡回ロボ v9.1 起動...")
-    print("🚀 [列位置自動特定・URL直行モード]")
+    print("🤖 ぽっけぇ〜道 スマート巡回ロボ v9.2 起動...")
+    print("🚀 [システム完全整合] 共有鍵＆相場同期モード")
     print("===========================================")
     
-    if not BASE_CLIENT_ID or not DISCORD_WEBHOOK_URL:
-        print("❌ エラー: api_keys.json の設定が不完全です。"); return
+    if not DISCORD_WEBHOOK_URL:
+        print("❌ エラー: api_keys.json に Discord Webhook URL が設定されていません。")
+        return
 
     try:
-        token = get_base_access_token()
-        base_prices = get_base_items_prices(token)
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_KEY_FILE, scope)
         client = gspread.authorize(creds)
         ss = client.open(SPREADSHEET_NAME)
+        
+        # 💡 アプリが保存したスプレッドシートの鍵を読み込む
+        ws_set = ss.worksheet("システム設定")
+        records_set = ws_set.get_all_records()
+        settings = {str(row['Key']): str(row['Value']) for row in records_set}
+        
+        BASE_CLIENT_ID = settings.get("CLIENT_ID", "")
+        BASE_CLIENT_SECRET = settings.get("CLIENT_SECRET", "")
+        BASE_REFRESH_TOKEN = settings.get("BASE_REFRESH_TOKEN", "")
+
+        base_prices = {}
+        if BASE_CLIENT_ID and BASE_REFRESH_TOKEN:
+            token = refresh_base_token(ws_set, BASE_CLIENT_ID, BASE_CLIENT_SECRET, BASE_REFRESH_TOKEN)
+            if token:
+                base_prices = get_base_items_prices(token)
+                print(f"✅ BASE API 接続成功 (取得件数: {len(base_prices)}件)")
+            else:
+                print("⚠️ BASE API 接続失敗（BASEの価格チェックはスキップします）")
+        else:
+            print("⚠️ BASEの連携設定がありません（アプリのメンテ画面で設定してください）")
+
         db_sheet = ss.worksheet("在庫DB")
         log_sheet = ss.worksheet("価格ログ")
-        
         records = db_sheet.get_all_records()
         log_data = log_sheet.get_all_records()
         header = db_sheet.row_values(1)
-        print(f"✅ 準備完了 (BASE:{len(base_prices)}件 / ログ:{len(log_data)}件)")
+        
     except Exception as e:
-        print(f"❌ 初期化失敗: {e}"); return
+        print(f"❌ 初期化失敗: {e}")
+        traceback.print_exc()
+        return
 
-    # 💡 スプレッドシートの見出し名から列番号を動的に取得する
     try:
         url_col = header.index("スニダンURL") + 1
         base_p_col = header.index("BASE販売価格") + 1
+        ref_p_col = header.index("参考相場") + 1
     except ValueError:
-        print("❌ エラー: シートに「スニダンURL」か「BASE販売価格」の列が見つかりません。")
-        print("    先にアプリ(app.py)を起動して、列を自動作成させてください。")
+        print("❌ エラー: シートに「スニダンURL」「BASE販売価格」「参考相場」の列が見つかりません。")
         return
 
     targets = []
@@ -137,9 +173,9 @@ def run_robot():
                 try: db_sheet.update_cell(idx + 2, base_p_col, new_p)
                 except: pass
                 
-            if row.get('ステータス') != '売却済み' and '10' in str(row.get('状態_PSA')) and snkrdunk_url.startswith('http'):
-                last_log = next((l for l in reversed(log_data) if str(l.get('ID')) == item_id), None)
-                targets.append({"row_index": idx + 2, "id": item_id, "name": row.get('商品名'), "url": snkrdunk_url, "base_price": int(new_p), "last_log": last_log})
+        if row.get('ステータス') != '売却済み' and '10' in str(row.get('状態_PSA')) and snkrdunk_url.startswith('http'):
+            last_log = next((l for l in reversed(log_data) if str(l.get('ID')) == item_id), None)
+            targets.append({"row_index": idx + 2, "id": item_id, "name": row.get('商品名'), "url": snkrdunk_url, "base_price": int(new_p) if item_id in base_prices else 0, "last_log": last_log})
 
     if not targets: print("✅ URLが設定された監視対象カードはありません。"); return
     send_discord(f"🔍 **スマート巡回開始** (直行モード: {len(targets)}件)")
@@ -159,7 +195,6 @@ def run_robot():
         for t in targets:
             scraped_url = t['url']
             print(f"\n➡️ 調査: {t['name']}")
-            print(f"  🔗 直行URL: {scraped_url}")
             page_text = ""
             
             for attempt in range(MAX_RETRIES):
@@ -207,6 +242,12 @@ def run_robot():
             current_val = avg_10 if avg_10 else latest_10[0]
             print(f"    📊 相場: ¥{current_val:,} (直近10件平均) / 24h: {count_24h}件成約{hot_mark} / トレンド: {trend}")
 
+            # 💡 アプリのダッシュボードに反映させるため、「参考相場」を上書き更新する
+            try:
+                db_sheet.update_cell(t['row_index'], ref_p_col, current_val)
+            except Exception as e:
+                print(f"    ❌ 参考相場更新エラー: {e}")
+
             last_avg = int(t['last_log'].get('スニダン平均', 0)) if t['last_log'] else 0
             price_diff = abs(current_val - last_avg)
             if price_diff >= MIN_CHANGE_TO_NOTIFY or (t['last_log'] and t['last_log'].get('トレンド') != trend):
@@ -216,8 +257,8 @@ def run_robot():
                 except Exception as e:
                     print(f"    ❌ ログ記録エラー: {e}")
 
-            base_gap = abs(current_val - t['base_price'])
-            if base_gap >= NOTIFY_THRESHOLD and price_diff >= MIN_CHANGE_TO_NOTIFY:
+            base_gap = abs(current_val - t['base_price']) if t['base_price'] > 0 else 0
+            if t['base_price'] > 0 and base_gap >= NOTIFY_THRESHOLD and price_diff >= MIN_CHANGE_TO_NOTIFY:
                 avg_24h_str = f"¥{avg_24h:,}" if avg_24h is not None else "---"
                 msg = (f"🔔 **【{trend}{hot_mark}】価格アラート**\n**{t['name']}**\n"
                        f"BASE価格: ¥{t['base_price']:,}\n"
@@ -233,7 +274,7 @@ def run_robot():
             time.sleep(random.uniform(3, 5))
 
         browser.close()
-        send_discord("✅ **スマート巡回完了 (URL直行)**")
+        send_discord("✅ **スマート巡回完了 (URL直行/完全同期)**")
         print("\n🏁 全巡回完了")
 
 if __name__ == "__main__":
