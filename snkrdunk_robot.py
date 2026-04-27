@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.7 完全防弾・安定稼働・パーセンテージ管理版)
+# ⚙️ 設定エリア (v10.8 最終形態：クラス指定型・超精密スクレイピング版)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05  # 前回取得時の相場から「5%」以上の変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.7 起動...")
-    print("🚀 [防弾ステルス機能・5%変動アラート・ゾンビ対策版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.8 起動...")
+    print("🚀 [クラス指定型・超精密スクレイピング版]")
     print("===========================================")
     
     try:
@@ -150,13 +150,12 @@ def run_robot():
         update_cells = []
 
         with sync_playwright() as p:
-            # 💡 【対策1】対BANステルス機能の搭載（自動操作の痕跡を消す）
+            # 対BANステルス機能搭載
             browser = p.chromium.launch(
                 headless=True,
                 args=['--disable-blink-features=AutomationControlled']
             )
             
-            # 💡 【対策4】ゾンビブラウザの確実な後片付け (finallyによる強制クローズ)
             try:
                 context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 context.route("**/*", lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
@@ -166,21 +165,19 @@ def run_robot():
 
                 for i, t in enumerate(targets):
                     print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
-                    page_text = ""
                     
-                    # 💡 【対策3】柔軟な待機条件とnetworkidleの撤廃
+                    history_items = []
+                    
                     for attempt in range(MAX_RETRIES):
                         try:
-                            # タイムアウトの原因だったnetworkidleを撤廃し、domcontentloadedで高速化
                             page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
                             
-                            # 待機条件の柔軟化（「最近の」が消えても対応できるよう「売買履歴」を部分一致で探す）
-                            page.wait_for_selector('text=売買履歴', state="visible", timeout=15000)
+                            # 💡 【究極改善】「売買履歴リスト」の親箱が画面に出現するまで待機
+                            list_locator = page.locator('ul.sales-history-item-list')
+                            list_locator.wait_for(state="visible", timeout=15000)
                             
-                            # 描画ラグ吸収スリープ（文字が出現してから裏側のデータが完全に展開されるまで2秒待つ）
-                            time.sleep(2)
-                            
-                            page_text = page.locator("body").text_content()
+                            # リスト内の「行 (li)」をすべて取得
+                            history_items = list_locator.locator('li').all()
                             break
                         except:
                             if attempt < MAX_RETRIES - 1:
@@ -189,52 +186,51 @@ def run_robot():
                             else:
                                 print("  ❌ 最終的に取得失敗 → スキップします")
 
-                    if not page_text:
+                    if not history_items:
                         continue
 
-                    # 💡 v10.6からの「ブロック分割法」を継承
-                    date_pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)'
-                    parts = re.split(date_pattern, page_text)
-                    
                     all_h = []
-                    for j in range(1, len(parts) - 1, 2):
-                        date_str = parts[j]
-                        chunk = parts[j + 1][:300]
-                        
-                        if t['mode'] == "PSA10":
-                            if not re.search(r'PSA\s*(?:10|１０)', chunk, re.IGNORECASE):
-                                continue
-                        else:
-                            if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', chunk, re.IGNORECASE):
-                                continue
-                        
-                        price_matches = re.findall(r'¥([\d,]+)', chunk)
-                        if not price_matches:
+                    # 💡 各行の「箱」から直接データを抜き出す
+                    for item in history_items:
+                        try:
+                            # 念のため、要素が存在するか確認しながら取得
+                            date_text = item.locator('.date').inner_text().strip()
+                            size_text = item.locator('.size').inner_text().strip()
+                            price_text = item.locator('.price').inner_text().strip()
+                        except:
+                            # 万が一構造の違う行が混ざっていても安全に無視
                             continue
+                            
+                        # === モード別フィルタ ===
+                        if t['mode'] == "PSA10":
+                            if not re.search(r'PSA\s*(?:10|１０)', size_text, re.IGNORECASE):
+                                continue
+                        else:  # BOXモード
+                            if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', size_text, re.IGNORECASE):
+                                continue
                         
-                        # 💡 v10.6からの「ブロック内の最大金額」を採用
-                        price = max(int(p.replace(",", "")) for p in price_matches)
-                        
-                        dt = parse_snkrdunk_date(date_str, now)
-                        if dt:
-                            all_h.append({"date": dt, "price": price})
+                        # === 価格抽出 ===
+                        price_match = re.search(r'¥([\d,]+)', price_text)
+                        if price_match:
+                            price = int(price_match.group(1).replace(",", ""))
+                            dt = parse_snkrdunk_date(date_text, now)
+                            if dt:
+                                all_h.append({"date": dt, "price": price})
+                                print(f"    → 抽出成功: {date_text} | {size_text} | ¥{price:,}")
 
                     if not all_h: 
-                        print("  💤 条件に一致する取引履歴が見つかりませんでした。")
+                        print("  💤 条件に一致する取引履歴(1個/PSA10)が見つかりませんでした。")
                         continue
 
                     all_h.sort(key=lambda x: x['date'], reverse=True)
                     latest_10 = filter_abnormal_prices([x['price'] for x in all_h[:10]])
                     current_val = sum(latest_10) // len(latest_10) if latest_10 else all_h[0]['price']
                     
-                    print(f"  📊 履歴から {len(all_h)} 件のデータを抽出しました。")
-                    print(f"  💰 最新相場: ¥{current_val:,} (前回の記録: ¥{t['old_price']:,})")
+                    print(f"  📊 有効履歴 {len(all_h)} 件から最新相場を算出: ¥{current_val:,} (前回の記録: ¥{t['old_price']:,})")
 
-                    # 💡 【対策2】パーセンテージ（5%）変動アラートへの移行
+                    # パーセンテージ（5%）変動アラート
                     diff = current_val - t['old_price']
                     trend = "安定"
-                    
-                    # 今回のアラート発火の基準額（前回相場 × 5%）
                     threshold_val = int(t['old_price'] * CHANGE_NOTIFY_PERCENT)
                     
                     if t['old_price'] > 0 and abs(diff) >= threshold_val:
@@ -277,7 +273,6 @@ def run_robot():
                     time.sleep(wait_time)
                     
             finally:
-                # 💡 【対策4】エラー発生時でも絶対にブラウザを閉じてメモリ枯渇を防ぐ
                 print("🧹 メモリ解放処理(ブラウザのクローズ)を実行します...")
                 browser.close()
             
