@@ -12,9 +12,9 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.6 抽出ロジック大幅強化・異常値完全排除版)
+# ⚙️ 設定エリア (v10.7 完全防弾・安定稼働・パーセンテージ管理版)
 # =========================================================
-CHANGE_NOTIFY_THRESHOLD = 500  # 前回取得時の相場から500円以上変動で通知
+CHANGE_NOTIFY_PERCENT = 0.05  # 前回取得時の相場から「5%」以上の変動で通知
 HISTORY_HOURS = 24
 MAX_RETRIES = 2
 SPREADSHEET_NAME = "ぽっけぇ〜道_システムv3"
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.6 起動...")
-    print("🚀 [抽出ロジック大幅強化・異常値完全排除版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.7 起動...")
+    print("🚀 [防弾ステルス機能・5%変動アラート・ゾンビ対策版]")
     print("===========================================")
     
     try:
@@ -150,124 +150,136 @@ def run_robot():
         update_cells = []
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            context.route("**/*", lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
-            page = context.new_page()
-            now = datetime.now()
-            now_str = now.strftime("%Y/%m/%d %H:%M:%S")
+            # 💡 【対策1】対BANステルス機能の搭載（自動操作の痕跡を消す）
+            browser = p.chromium.launch(
+                headless=True,
+                args=['--disable-blink-features=AutomationControlled']
+            )
+            
+            # 💡 【対策4】ゾンビブラウザの確実な後片付け (finallyによる強制クローズ)
+            try:
+                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                context.route("**/*", lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
+                page = context.new_page()
+                now = datetime.now()
+                now_str = now.strftime("%Y/%m/%d %H:%M:%S")
 
-            for i, t in enumerate(targets):
-                print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
-                page_text = ""
-                
-                # 💡 【v10.6】ページ読み込み耐性の強化
-                for attempt in range(MAX_RETRIES):
-                    try:
-                        # domcontentloaded -> networkidle に変更し、通信が落ち着くまで待機
-                        page.goto(t['url'], timeout=60000, wait_until="networkidle")
-                        page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=15000)
-                        page_text = page.locator("body").text_content()
-                        break
-                    except:
-                        if attempt < MAX_RETRIES - 1:
-                            print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES})")
-                            time.sleep(8 + attempt * 3)  # 失敗するごとに待機時間を増やす
-                        else:
-                            print("  ❌ 最終的に取得失敗 → スキップします")
-
-                if not page_text:
-                    continue
-
-                # 💡 【v10.6】ブロック分割法（価格抽出を最大値に変更）
-                date_pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)'
-                parts = re.split(date_pattern, page_text)
-                
-                all_h = []
-                for j in range(1, len(parts) - 1, 2):
-                    date_str = parts[j]
-                    chunk = parts[j + 1][:300]  # 価格が後ろにある場合に対応するため150→300に拡大
+                for i, t in enumerate(targets):
+                    print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
+                    page_text = ""
                     
-                    # === モード別フィルタ（BOXを緩和）===
-                    if t['mode'] == "PSA10":
-                        if not re.search(r'PSA\s*(?:10|１０)', chunk, re.IGNORECASE):
-                            continue
-                    else:  # BOXモード
-                        # 「1個」必須を緩和 → 「1個」または「BOX」「未開封」があればOK
-                        if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', chunk, re.IGNORECASE):
-                            continue
-                    
-                    # === 価格抽出を大幅強化 ===
-                    price_matches = re.findall(r'¥([\d,]+)', chunk)
-                    if not price_matches:
+                    # 💡 【対策3】柔軟な待機条件とnetworkidleの撤廃
+                    for attempt in range(MAX_RETRIES):
+                        try:
+                            # タイムアウトの原因だったnetworkidleを撤廃し、domcontentloadedで高速化
+                            page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
+                            
+                            # 待機条件の柔軟化（「最近の」が消えても対応できるよう「売買履歴」を部分一致で探す）
+                            page.wait_for_selector('text=売買履歴', state="visible", timeout=15000)
+                            
+                            # 描画ラグ吸収スリープ（文字が出現してから裏側のデータが完全に展開されるまで2秒待つ）
+                            time.sleep(2)
+                            
+                            page_text = page.locator("body").text_content()
+                            break
+                        except:
+                            if attempt < MAX_RETRIES - 1:
+                                print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES})")
+                                time.sleep(8 + attempt * 3)
+                            else:
+                                print("  ❌ 最終的に取得失敗 → スキップします")
+
+                    if not page_text:
                         continue
+
+                    # 💡 v10.6からの「ブロック分割法」を継承
+                    date_pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)'
+                    parts = re.split(date_pattern, page_text)
                     
-                    # ★ ここが最大の修正点 ★
-                    # ブロック内の「最大金額」を採用（売却価格は通常一番大きい）
-                    price = max(int(p.replace(",", "")) for p in price_matches)
+                    all_h = []
+                    for j in range(1, len(parts) - 1, 2):
+                        date_str = parts[j]
+                        chunk = parts[j + 1][:300]
+                        
+                        if t['mode'] == "PSA10":
+                            if not re.search(r'PSA\s*(?:10|１０)', chunk, re.IGNORECASE):
+                                continue
+                        else:
+                            if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', chunk, re.IGNORECASE):
+                                continue
+                        
+                        price_matches = re.findall(r'¥([\d,]+)', chunk)
+                        if not price_matches:
+                            continue
+                        
+                        # 💡 v10.6からの「ブロック内の最大金額」を採用
+                        price = max(int(p.replace(",", "")) for p in price_matches)
+                        
+                        dt = parse_snkrdunk_date(date_str, now)
+                        if dt:
+                            all_h.append({"date": dt, "price": price})
+
+                    if not all_h: 
+                        print("  💤 条件に一致する取引履歴が見つかりませんでした。")
+                        continue
+
+                    all_h.sort(key=lambda x: x['date'], reverse=True)
+                    latest_10 = filter_abnormal_prices([x['price'] for x in all_h[:10]])
+                    current_val = sum(latest_10) // len(latest_10) if latest_10 else all_h[0]['price']
                     
-                    dt = parse_snkrdunk_date(date_str, now)
-                    if dt:
-                        all_h.append({"date": dt, "price": price})
-                        # デバッグ用出力：どの価格が選ばれたかを確認
-                        print(f"    → 抽出価格: ¥{price:,}  (ブロック内検出金額: {[int(p.replace(',','')) for p in price_matches]})")
+                    print(f"  📊 履歴から {len(all_h)} 件のデータを抽出しました。")
+                    print(f"  💰 最新相場: ¥{current_val:,} (前回の記録: ¥{t['old_price']:,})")
 
-                if not all_h: 
-                    print("  💤 条件に一致する取引履歴が見つかりませんでした。")
-                    continue
-
-                # 日付順に並び替え、直近10件のうち異常な高値（1.8倍以上）を弾く
-                all_h.sort(key=lambda x: x['date'], reverse=True)
-                latest_10 = filter_abnormal_prices([x['price'] for x in all_h[:10]])
-                current_val = sum(latest_10) // len(latest_10) if latest_10 else all_h[0]['price']
-                
-                print(f"  📊 履歴から {len(all_h)} 件のデータを抽出しました。")
-                print(f"  💰 最新相場: ¥{current_val:,} (前回の記録: ¥{t['old_price']:,})")
-
-                # 自己比較アラートロジック
-                diff = current_val - t['old_price']
-                trend = "安定"
-                
-                if t['old_price'] > 0 and abs(diff) >= CHANGE_NOTIFY_THRESHOLD:
-                    if diff > 0:
-                        trend = "上昇"
-                        print(f"  🔔 {CHANGE_NOTIFY_THRESHOLD}円以上の高騰を検知！Discordに通知を送ります。")
-                        msg = f"📈 **【{t['mode']}高騰】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (+¥{diff:,})\n🔗 {t['url']}"
-                        send_discord(msg)
+                    # 💡 【対策2】パーセンテージ（5%）変動アラートへの移行
+                    diff = current_val - t['old_price']
+                    trend = "安定"
+                    
+                    # 今回のアラート発火の基準額（前回相場 × 5%）
+                    threshold_val = int(t['old_price'] * CHANGE_NOTIFY_PERCENT)
+                    
+                    if t['old_price'] > 0 and abs(diff) >= threshold_val:
+                        if diff > 0:
+                            trend = "上昇"
+                            print(f"  🔔 {threshold_val:,}円(5%)以上の高騰を検知！Discordに通知を送ります。")
+                            msg = f"📈 **【{t['mode']}高騰】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (+¥{diff:,})\n🔗 {t['url']}"
+                            send_discord(msg)
+                        else:
+                            trend = "下降"
+                            print(f"  🔔 {threshold_val:,}円(5%)以上の下落を検知！Discordに通知を送ります。")
+                            msg = f"📉 **【{t['mode']}暴落】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (-¥{abs(diff):,})\n🔗 {t['url']}"
+                            send_discord(msg)
+                    elif t['old_price'] == 0:
+                        print("  ➖ 初回取得のため、通知はスキップします。")
                     else:
-                        trend = "下降"
-                        print(f"  🔔 {CHANGE_NOTIFY_THRESHOLD}円以上の下落を検知！Discordに通知を送ります。")
-                        msg = f"📉 **【{t['mode']}暴落】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (-¥{abs(diff):,})\n🔗 {t['url']}"
-                        send_discord(msg)
-                elif t['old_price'] == 0:
-                    print("  ➖ 初回取得のため、通知はスキップします。")
-                else:
-                    if diff > 0: trend = "上昇"
-                    elif diff < 0: trend = "下降"
-                    print(f"  ➖ 変動幅が基準未満のため、通知はスキップしました。")
+                        if diff > 0: trend = "上昇"
+                        elif diff < 0: trend = "下降"
+                        print(f"  ➖ 変動幅が5%({threshold_val:,}円)未満のため、通知はスキップしました。")
 
-                log_records_to_append.append([
-                    now_str, t['id'], t['name'], t['base_price'], current_val, trend, t['url']
-                ])
-                print("  📝 この商品の価格ログ追加を予約しました。")
+                    log_records_to_append.append([
+                        now_str, t['id'], t['name'], t['base_price'], current_val, trend, t['url']
+                    ])
+                    print("  📝 この商品の価格ログ追加を予約しました。")
 
-                sync_count = 0
-                for idx, row in enumerate(records):
-                    if str(row.get('商品名')) == t['name'] and str(row.get('収録パック')) == t['pack']:
-                        r_idx = idx + 2
-                        update_cells.append(gspread.Cell(row=r_idx, col=ref_p_col, value=current_val))
-                        item_id = str(row.get('ID'))
-                        if item_id in base_prices:
-                            update_cells.append(gspread.Cell(row=r_idx, col=base_p_col, value=base_prices[item_id]))
-                        sync_count += 1
-                
-                print(f"  🔄 在庫DB {sync_count} 行分の同期データをセットしました。")
-                
-                wait_time = random.uniform(8, 15)
-                print(f"  ⏳ サイト負荷軽減のため {wait_time:.1f} 秒待機します...\n")
-                time.sleep(wait_time)
-
-            browser.close()
+                    sync_count = 0
+                    for idx, row in enumerate(records):
+                        if str(row.get('商品名')) == t['name'] and str(row.get('収録パック')) == t['pack']:
+                            r_idx = idx + 2
+                            update_cells.append(gspread.Cell(row=r_idx, col=ref_p_col, value=current_val))
+                            item_id = str(row.get('ID'))
+                            if item_id in base_prices:
+                                update_cells.append(gspread.Cell(row=r_idx, col=base_p_col, value=base_prices[item_id]))
+                            sync_count += 1
+                    
+                    print(f"  🔄 在庫DB {sync_count} 行分の同期データをセットしました。")
+                    
+                    wait_time = random.uniform(8, 15)
+                    print(f"  ⏳ サイト負荷軽減のため {wait_time:.1f} 秒待機します...\n")
+                    time.sleep(wait_time)
+                    
+            finally:
+                # 💡 【対策4】エラー発生時でも絶対にブラウザを閉じてメモリ枯渇を防ぐ
+                print("🧹 メモリ解放処理(ブラウザのクローズ)を実行します...")
+                browser.close()
             
             print("\n===========================================")
             print("💾 最終データ書き込みフェーズ")
