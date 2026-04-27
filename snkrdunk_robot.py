@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.3 実況ログ・厳格抽出・強制記録版)
+# ⚙️ 設定エリア (v10.4 実況・厳格抽出・隠しテキスト全取得版)
 # =========================================================
 CHANGE_NOTIFY_THRESHOLD = 500  # 前回取得時の相場から500円以上変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.3 起動...")
-    print("🚀 [PSA10 & 未開封BOX(1個限定) / 実況・強制ログ記録版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.4 起動...")
+    print("🚀 [隠しテキスト全取得・実況・強制ログ記録版]")
     print("===========================================")
     
     try:
@@ -166,8 +166,8 @@ def run_robot():
                     try:
                         page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
                         page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=10000)
-                        # body全体ではなく、可能な限りテキストを取得
-                        page_text = page.locator("body").inner_text()
+                        # 💡 【改修ポイント】画面に見えていなくても裏側にあるテキストを根こそぎ取得する
+                        page_text = page.locator("body").text_content()
                         break
                     except:
                         if attempt < MAX_RETRIES - 1:
@@ -178,9 +178,8 @@ def run_robot():
                     print("  ❌ サイトの取得に失敗しました。この商品はスキップします。")
                     continue
 
-                # 💡 【ズレ防止の厳格抽出ロジック v10.3】
+                # 💡 【ズレ防止の厳格抽出ロジック】
                 # [^¥]*? を挟むことで、「日付から金額(¥)までの間に、別の金額(¥)が絶対に存在しない」ことを保証する。
-                # これにより、別の取引データと合体してしまう事故を完全に防ぎます。
                 if t['mode'] == "PSA10":
                     pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)\s*[^¥]*?PSA\s*(?:10|１０)[^¥]*?¥([\d,]+)'
                 else:
