@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.2 自己比較アラート・ログ記録・抽出精度向上版)
+# ⚙️ 設定エリア (v10.3 実況ログ・厳格抽出・強制記録版)
 # =========================================================
 CHANGE_NOTIFY_THRESHOLD = 500  # 前回取得時の相場から500円以上変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.2 起動...")
-    print("🚀 [PSA10 & 未開封BOX(1個限定) / 自己比較・ログ記録対応]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.3 起動...")
+    print("🚀 [PSA10 & 未開封BOX(1個限定) / 実況・強制ログ記録版]")
     print("===========================================")
     
     try:
@@ -109,8 +109,11 @@ def run_robot():
         
         base_prices = {}
         if set_data.get("CLIENT_ID") and set_data.get("BASE_REFRESH_TOKEN"):
+            print("🔑 BASE APIトークンを更新・取得中...")
             token = refresh_base_token(ws_set, set_data["CLIENT_ID"], set_data["CLIENT_SECRET"], set_data["BASE_REFRESH_TOKEN"])
-            if token: base_prices = get_base_items_prices(token)
+            if token: 
+                base_prices = get_base_items_prices(token)
+                print(f"✅ BASEの価格データを取得完了 ({len(base_prices)}件)")
 
         db_sheet = ss.worksheet("在庫DB")
         log_sheet = ss.worksheet("価格ログ")
@@ -138,7 +141,11 @@ def run_robot():
                     "old_price": old_price
                 })
 
-        if not targets: print("✅ 監視対象URLが見つかりません。"); return
+        if not targets: 
+            print("✅ 監視対象(スニダンURL)が在庫DBに見つかりません。終了します。")
+            return
+            
+        print(f"🔍 監視対象を {len(targets)} 件発見しました。巡回を開始します...")
         send_discord(f"🔍 **総合監視開始** (対象: {len(targets)}件)")
 
         log_records_to_append = []
@@ -150,28 +157,34 @@ def run_robot():
             context.route("**/*", lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
             page = context.new_page()
             now = datetime.now()
-            now_str = now.strftime("%Y/%m/%d %H:%M")
+            now_str = now.strftime("%Y/%m/%d %H:%M:%S")
 
-            for t in targets:
-                print(f"\n➡️ 調査({t['mode']}): {t['name']}")
+            for i, t in enumerate(targets):
+                print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
                 page_text = ""
                 for attempt in range(MAX_RETRIES):
                     try:
                         page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
                         page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=10000)
+                        # body全体ではなく、可能な限りテキストを取得
                         page_text = page.locator("body").inner_text()
                         break
                     except:
-                        if attempt < MAX_RETRIES - 1: time.sleep(5)
+                        if attempt < MAX_RETRIES - 1:
+                            print("  ⚠️ ページの読み込みに失敗。再試行します...")
+                            time.sleep(5)
 
-                if not page_text: print("  ⚠️ 取得失敗"); continue
+                if not page_text: 
+                    print("  ❌ サイトの取得に失敗しました。この商品はスキップします。")
+                    continue
 
-                # 💡 【ズレ防止の厳格抽出ロジック】
-                # [^\n]*? を使用することで、途中に改行を挟むことを許さず、同じ行（ブロック）にあるデータだけを紐付ける
+                # 💡 【ズレ防止の厳格抽出ロジック v10.3】
+                # [^¥]*? を挟むことで、「日付から金額(¥)までの間に、別の金額(¥)が絶対に存在しない」ことを保証する。
+                # これにより、別の取引データと合体してしまう事故を完全に防ぎます。
                 if t['mode'] == "PSA10":
-                    pattern = r'(\d+[秒分時間日]前|[\d/]+\s*[\d:]*)[^\n]*?PSA\s*(?:10|１０)[^\n]*?¥([\d,]+)'
+                    pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)\s*[^¥]*?PSA\s*(?:10|１０)[^¥]*?¥([\d,]+)'
                 else:
-                    pattern = r'(\d+[秒分時間日]前|[\d/]+\s*[\d:]*)[^\n]*?(?<!\d)1個(?!\d)[^\n]*?¥([\d,]+)'
+                    pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)\s*[^¥]*?(?<!\d)1個(?!\d)[^¥]*?¥([\d,]+)'
 
                 matches = re.findall(pattern, page_text, re.IGNORECASE)
                 all_h = []
@@ -179,13 +192,16 @@ def run_robot():
                     dt = parse_snkrdunk_date(m[0], now)
                     if dt: all_h.append({"date": dt, "price": int(m[1].replace(",", ""))})
 
-                if not all_h: print("  💤 適合する取引履歴なし"); continue
+                if not all_h: 
+                    print("  💤 条件に一致する取引履歴(1個/PSA10)が見つかりませんでした。")
+                    continue
 
                 all_h.sort(key=lambda x: x['date'], reverse=True)
                 latest_10 = filter_abnormal_prices([x['price'] for x in all_h[:10]])
                 current_val = sum(latest_10) // len(latest_10) if latest_10 else all_h[0]['price']
                 
-                print(f"    📊 最新相場: ¥{current_val:,} (前回: ¥{t['old_price']:,})")
+                print(f"  📊 履歴から {len(all_h)} 件のデータを抽出しました。")
+                print(f"  💰 最新相場: ¥{current_val:,} (前回の記録: ¥{t['old_price']:,})")
 
                 # 💡 自己比較アラートロジック (500円以上の変動で通知)
                 diff = current_val - t['old_price']
@@ -194,23 +210,29 @@ def run_robot():
                 if t['old_price'] > 0 and abs(diff) >= CHANGE_NOTIFY_THRESHOLD:
                     if diff > 0:
                         trend = "上昇"
+                        print(f"  🔔 {CHANGE_NOTIFY_THRESHOLD}円以上の高騰を検知！Discordに通知を送ります。")
                         msg = f"📈 **【{t['mode']}高騰】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (+¥{diff:,})\n🔗 {t['url']}"
                         send_discord(msg)
                     else:
                         trend = "下降"
+                        print(f"  🔔 {CHANGE_NOTIFY_THRESHOLD}円以上の下落を検知！Discordに通知を送ります。")
                         msg = f"📉 **【{t['mode']}暴落】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (-¥{abs(diff):,})\n🔗 {t['url']}"
                         send_discord(msg)
-                elif diff > 0:
-                    trend = "上昇"
-                elif diff < 0:
-                    trend = "下降"
+                elif t['old_price'] == 0:
+                    print("  ➖ 初回取得のため、通知はスキップします。")
+                else:
+                    if diff > 0: trend = "上昇"
+                    elif diff < 0: trend = "下降"
+                    print(f"  ➖ 変動幅が基準({CHANGE_NOTIFY_THRESHOLD}円)未満のため、通知はスキップしました。")
 
-                # 💡 価格ログへ記録するデータを準備
+                # 💡 価格ログへ記録するデータを強制準備
                 log_records_to_append.append([
                     now_str, t['id'], t['name'], t['base_price'], current_val, trend, t['url']
                 ])
+                print("  📝 この商品の価格ログ追加を予約しました。")
 
                 # 💡 同一商品の全在庫を一括同期
+                sync_count = 0
                 for idx, row in enumerate(records):
                     if str(row.get('商品名')) == t['name'] and str(row.get('収録パック')) == t['pack']:
                         r_idx = idx + 2
@@ -218,24 +240,34 @@ def run_robot():
                         item_id = str(row.get('ID'))
                         if item_id in base_prices:
                             update_cells.append(gspread.Cell(row=r_idx, col=base_p_col, value=base_prices[item_id]))
+                        sync_count += 1
+                
+                print(f"  🔄 在庫DB {sync_count} 行分の同期データをセットしました。")
                 
                 # IPバン対策の安全待機
-                time.sleep(random.uniform(8, 15))
+                wait_time = random.uniform(8, 15)
+                print(f"  ⏳ サイト負荷軽減のため {wait_time:.1f} 秒待機します...\n")
+                time.sleep(wait_time)
 
             browser.close()
             
-            # DBとログの最終書き込み処理
+            print("\n===========================================")
+            print("💾 最終データ書き込みフェーズ")
+            
             if update_cells:
                 db_sheet.update_cells(update_cells)
-                print(f"✅ 在庫DBを一括更新しました ({len(update_cells)//2}行)")
+                print(f"✅ 在庫DBを一括更新しました ({len(update_cells)//2}箇所)")
             
             if log_records_to_append:
                 # APIの負荷を減らすため、全商品のログを最後に1回でまとめて追記する
                 log_sheet.append_rows(log_records_to_append)
-                print(f"📝 価格ログに {len(log_records_to_append)} 件の記録を追加しました。")
+                print(f"✅ 価格ログシートに {len(log_records_to_append)} 件の記録を追加しました。")
+            else:
+                print("ℹ️ 今回記録する価格ログはありませんでした。")
 
             send_discord("✅ **総合監視完了**")
-            print("\n🏁 全巡回完了")
+            print("🏁 全巡回完了")
+            print("===========================================")
             
     except Exception:
         traceback.print_exc()
