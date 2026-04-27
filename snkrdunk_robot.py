@@ -12,12 +12,10 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.0 BOX対応・一括同期版)
+# ⚙️ 設定エリア (v10.2 自己比較アラート・ログ記録・抽出精度向上版)
 # =========================================================
-NOTIFY_THRESHOLD = 1000
-MIN_CHANGE_TO_NOTIFY = 500
+CHANGE_NOTIFY_THRESHOLD = 500  # 前回取得時の相場から500円以上変動で通知
 HISTORY_HOURS = 24
-HOT_THRESHOLD = 5
 MAX_RETRIES = 2
 SPREADSHEET_NAME = "ぽっけぇ〜道_システムv3"
 JSON_KEY_FILE = "secrets.json"
@@ -97,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.0 起動...")
-    print("🚀 [PSA10 & 未開封BOX 二刀流モード]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.2 起動...")
+    print("🚀 [PSA10 & 未開封BOX(1個限定) / 自己比較・ログ記録対応]")
     print("===========================================")
     
     try:
@@ -123,21 +121,28 @@ def run_robot():
         base_p_col = header.index("BASE販売価格") + 1
         ref_p_col = header.index("参考相場") + 1
         
-        # 💡 URLが貼ってある「代表行」を抽出
+        # 💡 URLが貼ってある「代表行」を抽出し、前回の相場(old_price)も保持する
         targets = []
         for idx, row in enumerate(records):
             url = str(row.get('スニダンURL', '')).strip()
             if row.get('ステータス') != '売却済み' and url.startswith('http'):
-                # 判定: PSA10か、未開封BOXか
                 mode = "PSA10" if "10" in str(row.get('状態_PSA')) else "BOX"
+                # 参考相場が空欄の場合は0とする
+                old_p_raw = row.get('参考相場')
+                old_price = int(old_p_raw) if str(old_p_raw).isdigit() else 0
+                
                 targets.append({
                     "row_idx": idx + 2, "id": str(row.get('ID')), "name": str(row.get('商品名')), 
                     "pack": str(row.get('収録パック')), "url": url, "mode": mode,
-                    "base_price": int(base_prices.get(str(row.get('ID')), 0))
+                    "base_price": int(base_prices.get(str(row.get('ID')), 0)),
+                    "old_price": old_price
                 })
 
         if not targets: print("✅ 監視対象URLが見つかりません。"); return
         send_discord(f"🔍 **総合監視開始** (対象: {len(targets)}件)")
+
+        log_records_to_append = []
+        update_cells = []
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -145,6 +150,7 @@ def run_robot():
             context.route("**/*", lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
             page = context.new_page()
             now = datetime.now()
+            now_str = now.strftime("%Y/%m/%d %H:%M")
 
             for t in targets:
                 print(f"\n➡️ 調査({t['mode']}): {t['name']}")
@@ -160,58 +166,77 @@ def run_robot():
 
                 if not page_text: print("  ⚠️ 取得失敗"); continue
 
-                # 💡 【二刀流ロジック】モードによって抽出パターンを切り替える
+                # 💡 【ズレ防止の厳格抽出ロジック】
+                # [^\n]*? を使用することで、途中に改行を挟むことを許さず、同じ行（ブロック）にあるデータだけを紐付ける
                 if t['mode'] == "PSA10":
-                    pattern = r'(\d+[秒分時間日]前|[\d/]+\s*[\d:]*).*?PSA\s*(?:10|１０).*?¥([\d,]+)'
+                    pattern = r'(\d+[秒分時間日]前|[\d/]+\s*[\d:]*)[^\n]*?PSA\s*(?:10|１０)[^\n]*?¥([\d,]+)'
                 else:
-                    # BOX用：PSAの文字がない通常の価格履歴を拾う
-                    pattern = r'(\d+[秒分時間日]前|[\d/]+\s*[\d:]*).*?¥([\d,]+)'
+                    pattern = r'(\d+[秒分時間日]前|[\d/]+\s*[\d:]*)[^\n]*?(?<!\d)1個(?!\d)[^\n]*?¥([\d,]+)'
 
-                matches = re.findall(pattern, page_text, re.IGNORECASE | re.DOTALL)
+                matches = re.findall(pattern, page_text, re.IGNORECASE)
                 all_h = []
                 for m in matches:
                     dt = parse_snkrdunk_date(m[0], now)
                     if dt: all_h.append({"date": dt, "price": int(m[1].replace(",", ""))})
 
-                if not all_h: print("  💤 取引履歴なし"); continue
+                if not all_h: print("  💤 適合する取引履歴なし"); continue
 
                 all_h.sort(key=lambda x: x['date'], reverse=True)
                 latest_10 = filter_abnormal_prices([x['price'] for x in all_h[:10]])
                 current_val = sum(latest_10) // len(latest_10) if latest_10 else all_h[0]['price']
                 
-                print(f"    📊 最新相場: ¥{current_val:,}")
+                print(f"    📊 最新相場: ¥{current_val:,} (前回: ¥{t['old_price']:,})")
 
-                # 💡 【一括同期ロジック】同じ商品名の在庫をすべて探し、一括で価格を更新する
-                update_cells = []
+                # 💡 自己比較アラートロジック (500円以上の変動で通知)
+                diff = current_val - t['old_price']
+                trend = "安定"
+                
+                if t['old_price'] > 0 and abs(diff) >= CHANGE_NOTIFY_THRESHOLD:
+                    if diff > 0:
+                        trend = "上昇"
+                        msg = f"📈 **【{t['mode']}高騰】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (+¥{diff:,})\n🔗 {t['url']}"
+                        send_discord(msg)
+                    else:
+                        trend = "下降"
+                        msg = f"📉 **【{t['mode']}暴落】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (-¥{abs(diff):,})\n🔗 {t['url']}"
+                        send_discord(msg)
+                elif diff > 0:
+                    trend = "上昇"
+                elif diff < 0:
+                    trend = "下降"
+
+                # 💡 価格ログへ記録するデータを準備
+                log_records_to_append.append([
+                    now_str, t['id'], t['name'], t['base_price'], current_val, trend, t['url']
+                ])
+
+                # 💡 同一商品の全在庫を一括同期
                 for idx, row in enumerate(records):
-                    # 商品名とパック名が一致すれば、IDが違っても同期対象とする
                     if str(row.get('商品名')) == t['name'] and str(row.get('収録パック')) == t['pack']:
                         r_idx = idx + 2
-                        # 参考相場を更新
                         update_cells.append(gspread.Cell(row=r_idx, col=ref_p_col, value=current_val))
-                        # もしBASE価格も判明していれば更新
                         item_id = str(row.get('ID'))
                         if item_id in base_prices:
                             update_cells.append(gspread.Cell(row=r_idx, col=base_p_col, value=base_prices[item_id]))
                 
-                if update_cells:
-                    db_sheet.update_cells(update_cells)
-                    print(f"    ✅ 同一商品の全在庫 ({len(update_cells)//2}行) を同期しました")
-
-                # アラート判定
-                if t['base_price'] > 0:
-                    gap = abs(current_val - t['base_price'])
-                    if gap >= NOTIFY_THRESHOLD:
-                        msg = (f"🔔 **【{t['mode']}】価格アラート**\n**{t['name']}**\n"
-                               f"BASE価格: ¥{t['base_price']:,}\n最新相場: **¥{current_val:,}**\n"
-                               f"乖離: ¥{gap:,}\n🔗 {t['url']}")
-                        send_discord(msg)
-                
-                time.sleep(random.uniform(3, 5))
+                # IPバン対策の安全待機
+                time.sleep(random.uniform(8, 15))
 
             browser.close()
+            
+            # DBとログの最終書き込み処理
+            if update_cells:
+                db_sheet.update_cells(update_cells)
+                print(f"✅ 在庫DBを一括更新しました ({len(update_cells)//2}行)")
+            
+            if log_records_to_append:
+                # APIの負荷を減らすため、全商品のログを最後に1回でまとめて追記する
+                log_sheet.append_rows(log_records_to_append)
+                print(f"📝 価格ログに {len(log_records_to_append)} 件の記録を追加しました。")
+
             send_discord("✅ **総合監視完了**")
             print("\n🏁 全巡回完了")
+            
     except Exception:
         traceback.print_exc()
 
