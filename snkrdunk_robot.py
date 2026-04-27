@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.10 スクロール誘発・完全取得版)
+# ⚙️ 設定エリア (v10.11 完全抽出・生データ実況・PSA10最適化版)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05  # 前回取得時の相場から「5%」以上の変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.10 起動...")
-    print("🚀 [原因究明デバッグ・スクロール誘発版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.11 起動...")
+    print("🚀 [完全抽出・生データ実況・PSA10最適化版]")
     print("===========================================")
     
     try:
@@ -149,7 +149,7 @@ def run_robot():
         update_cells = []
 
         with sync_playwright() as p:
-            # 💡 【デバッグ用】画面を表示させたまま実行します
+            # デバッグ用に画面を表示させたまま実行
             browser = p.chromium.launch(
                 headless=False,
                 args=['--disable-blink-features=AutomationControlled']
@@ -165,62 +165,72 @@ def run_robot():
                 for i, t in enumerate(targets):
                     print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
                     
-                    history_items = []
+                    list_locator = None
                     
                     for attempt in range(MAX_RETRIES):
                         try:
                             page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
                             
-                            # 💡 【重要対策】遅延読み込み（Lazy Load）を強制的に呼び起こすため、画面を下にスクロールする
+                            # スクロールして遅延読み込みを誘発
                             page.evaluate("window.scrollBy(0, 800)")
                             time.sleep(1)
                             page.evaluate("window.scrollBy(0, 800)")
                             time.sleep(2)
                             
-                            # クラス名の揺れ（スペース有無など）に対応するため、包含検索に変更
-                            list_locator = page.locator('ul[class*="sales-history"]')
+                            # クラスを直接指定してリスト全体を待機
+                            list_locator = page.locator('.sales-history-item-list').first
+                            list_locator.wait_for(state="attached", timeout=15000)
                             
-                            # 要素がDOM内にアタッチされる（作られる）のを待機
-                            list_locator.first.wait_for(state="attached", timeout=15000)
-                            
-                            history_items = list_locator.first.locator('li').all()
                             break
                         except Exception as e:
                             if attempt < MAX_RETRIES - 1:
-                                print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES}) - エラー詳細: {e}")
+                                print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES})")
                                 time.sleep(5)
                             else:
-                                print(f"  ❌ 最終的に取得失敗 → スキップします - エラー詳細: {e}")
+                                print(f"  ❌ 最終的に取得失敗 → スキップします")
 
-                    if not history_items:
+                    if not list_locator:
                         continue
 
                     all_h = []
-                    for item in history_items:
+                    # 💡 【重要】リスト内の行(li)をカウントして直接アクセスする
+                    row_count = list_locator.locator('li').count()
+                    
+                    for j in range(row_count):
+                        item = list_locator.locator('li').nth(j)
                         try:
-                            date_text = item.locator('.date').inner_text().strip()
-                            size_text = item.locator('.size').inner_text().strip()
-                            price_text = item.locator('.price').inner_text().strip()
+                            # inner_text の罠を回避し、text_content で強制取得
+                            date_text = item.locator('.date').text_content().strip()
+                            size_text = item.locator('.size').text_content().strip()
+                            price_text = item.locator('.price').text_content().strip()
                         except:
                             continue
+                        
+                        # 生データの実況（最初の5件だけ表示してログが長くなりすぎるのを防ぐ）
+                        if j < 5:
+                            print(f"    [🔍 生データ抽出] 日付:{date_text} | サイズ:{size_text} | 価格:{price_text}")
                             
+                        # === モード別フィルタ ===
                         if t['mode'] == "PSA10":
-                            if not re.search(r'PSA\s*(?:10|１０)', size_text, re.IGNORECASE):
-                                continue
-                        else:
+                            # PSA10ページは全履歴がPSA10なのでサイズ欄チェックをスキップ
+                            pass
+                        else:  # BOXモード
                             if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', size_text, re.IGNORECASE):
                                 continue
                         
+                        # === 価格抽出 ===
                         price_match = re.search(r'¥([\d,]+)', price_text)
                         if price_match:
                             price = int(price_match.group(1).replace(",", ""))
                             dt = parse_snkrdunk_date(date_text, now)
                             if dt:
                                 all_h.append({"date": dt, "price": price})
-                                print(f"    → 抽出成功: {date_text} | {size_text} | ¥{price:,}")
+                                # 抽出に成功したものを表示
+                                if j < 5:
+                                    print(f"      ✅ 条件クリア: ¥{price:,} として登録")
 
                     if not all_h: 
-                        print("  💤 条件に一致する取引履歴が見つかりませんでした。")
+                        print("  💤 条件に一致する取引履歴(1個のみ)が見つかりませんでした。")
                         continue
 
                     all_h.sort(key=lambda x: x['date'], reverse=True)
