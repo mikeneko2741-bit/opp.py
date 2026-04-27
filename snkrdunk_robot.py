@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.5 超精密ブロック分割・異常値完全排除版)
+# ⚙️ 設定エリア (v10.6 抽出ロジック大幅強化・異常値完全排除版)
 # =========================================================
 CHANGE_NOTIFY_THRESHOLD = 500  # 前回取得時の相場から500円以上変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.5 起動...")
-    print("🚀 [超精密ブロック分割・異常値完全排除版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.6 起動...")
+    print("🚀 [抽出ロジック大幅強化・異常値完全排除版]")
     print("===========================================")
     
     try:
@@ -160,52 +160,60 @@ def run_robot():
             for i, t in enumerate(targets):
                 print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
                 page_text = ""
+                
+                # 💡 【v10.6】ページ読み込み耐性の強化
                 for attempt in range(MAX_RETRIES):
                     try:
-                        page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
-                        page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=10000)
-                        # 裏側のテキストをすべて取得
+                        # domcontentloaded -> networkidle に変更し、通信が落ち着くまで待機
+                        page.goto(t['url'], timeout=60000, wait_until="networkidle")
+                        page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=15000)
                         page_text = page.locator("body").text_content()
                         break
                     except:
                         if attempt < MAX_RETRIES - 1:
-                            print("  ⚠️ ページの読み込みに失敗。再試行します...")
-                            time.sleep(5)
+                            print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES})")
+                            time.sleep(8 + attempt * 3)  # 失敗するごとに待機時間を増やす
+                        else:
+                            print("  ❌ 最終的に取得失敗 → スキップします")
 
-                if not page_text: 
-                    print("  ❌ サイトの取得に失敗しました。この商品はスキップします。")
+                if not page_text:
                     continue
 
-                # 💡 【v10.5 ブロック分割法】
-                # まず、テキストを「日付」の場所でハサミで切り刻み、1件1件の取引ブロックに小分けにする
+                # 💡 【v10.6】ブロック分割法（価格抽出を最大値に変更）
                 date_pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)'
                 parts = re.split(date_pattern, page_text)
                 
                 all_h = []
-                # parts は [ゴミテキスト, 日付1, ブロック1, 日付2, ブロック2...] という配列になる
                 for j in range(1, len(parts) - 1, 2):
                     date_str = parts[j]
-                    # 次の日付までのテキスト（最大150文字に制限して、ページ下部の巨大数字を絶対に巻き込まない）
-                    chunk = parts[j+1][:150]
+                    chunk = parts[j + 1][:300]  # 価格が後ろにある場合に対応するため150→300に拡大
                     
-                    # ブロック内に「PSA10」または「1個」があるか判定
+                    # === モード別フィルタ（BOXを緩和）===
                     if t['mode'] == "PSA10":
                         if not re.search(r'PSA\s*(?:10|１０)', chunk, re.IGNORECASE):
                             continue
-                    else:
-                        if not re.search(r'(?<!\d)1個(?!\d)', chunk):
+                    else:  # BOXモード
+                        # 「1個」必須を緩和 → 「1個」または「BOX」「未開封」があればOK
+                        if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', chunk, re.IGNORECASE):
                             continue
                     
-                    # ブロック内にある「¥」の金額だけを抽出
-                    price_match = re.search(r'¥([\d,]+)', chunk)
-                    if price_match:
-                        dt = parse_snkrdunk_date(date_str, now)
-                        if dt:
-                            price = int(price_match.group(1).replace(",", ""))
-                            all_h.append({"date": dt, "price": price})
+                    # === 価格抽出を大幅強化 ===
+                    price_matches = re.findall(r'¥([\d,]+)', chunk)
+                    if not price_matches:
+                        continue
+                    
+                    # ★ ここが最大の修正点 ★
+                    # ブロック内の「最大金額」を採用（売却価格は通常一番大きい）
+                    price = max(int(p.replace(",", "")) for p in price_matches)
+                    
+                    dt = parse_snkrdunk_date(date_str, now)
+                    if dt:
+                        all_h.append({"date": dt, "price": price})
+                        # デバッグ用出力：どの価格が選ばれたかを確認
+                        print(f"    → 抽出価格: ¥{price:,}  (ブロック内検出金額: {[int(p.replace(',','')) for p in price_matches]})")
 
                 if not all_h: 
-                    print("  💤 条件に一致する取引履歴(1個/PSA10)が見つかりませんでした。")
+                    print("  💤 条件に一致する取引履歴が見つかりませんでした。")
                     continue
 
                 # 日付順に並び替え、直近10件のうち異常な高値（1.8倍以上）を弾く
