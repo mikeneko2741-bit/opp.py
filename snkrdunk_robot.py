@@ -12,12 +12,13 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v11.3 完全クリーンアップ＆バックグラウンド稼働版)
+# ⚙️ 設定エリア (v11.4 最終防衛ライン：90%接近アラート＆95%自動非表示)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05        # 3万円未満の商品：前回から「5%」以上の変動で通知
 HIGH_PRICE_THRESHOLD = 30000        # 高額商品の基準（3万円）
 HIGH_PRICE_FLUCTUATION = 1000       # 3万円以上の商品：前回から「1,000円」以上の変動で通知
-BASE_PRICE_PROXIMITY_THRESHOLD = 0.90 # スニダン相場がBASE価格の「90%」以上で通知
+BASE_PRICE_PROXIMITY_ALERT = 0.90   # スニダン相場がBASE価格の「90%」以上で警告通知
+BASE_PRICE_PROXIMITY_HIDE = 0.95    # スニダン相場がBASE価格の「95%」以上で緊急通知 ＆ 自動非表示
 HISTORY_HOURS = 24
 MAX_RETRIES = 2
 SPREADSHEET_NAME = "ぽっけぇ〜道_システムv3"
@@ -60,8 +61,9 @@ def refresh_base_token(ws_set, client_id, client_secret, refresh_token):
             return access_token
     except: return ""
 
-def get_base_items_prices(access_token):
-    base_prices = {}; offset = 0
+def get_base_items_info(access_token):
+    # 💡 【改修】価格だけでなく、商品を操作するための「内部ID」も同時に取得する
+    base_info = {}; offset = 0
     while True:
         url = f"https://api.thebase.in/1/items?limit=100&offset={offset}"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
@@ -69,11 +71,29 @@ def get_base_items_prices(access_token):
             with urllib.request.urlopen(req) as res:
                 items = json.load(res).get("items", [])
                 for item in items:
-                    if item.get("identifier"): base_prices[item["identifier"]] = item.get("price", 0)
+                    ident = item.get("identifier")
+                    if ident: 
+                        base_info[ident] = {
+                            "price": item.get("price", 0),
+                            "item_id": item.get("item_id") # 非表示操作に必要
+                        }
                 if len(items) < 100: break
                 offset += 100
         except: break
-    return base_prices
+    return base_info
+
+def hide_base_item(access_token, item_id):
+    # 💡 【新規】BASEの対象商品を強制的に「非表示(visible=0)」に書き換える
+    url = "https://api.thebase.in/1/items/edit"
+    params = {"item_id": item_id, "visible": 0}
+    req = urllib.request.Request(url, data=urlencode(params).encode(), method="POST")
+    req.add_header("Authorization", f"Bearer {access_token}")
+    try:
+        with urllib.request.urlopen(req) as res:
+            return True
+    except Exception as e:
+        print(f"  ⚠️ BASE APIエラー (非表示化失敗): {e}")
+        return False
 
 def parse_snkrdunk_date(date_str, now):
     try:
@@ -98,8 +118,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.3 起動...")
-    print("🚀 [本番稼働用：完全クリーンアップ＆バックグラウンド稼働版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.4 起動...")
+    print("🚀 [最終防衛ライン：2段階接近アラート＆自動非表示機能搭載]")
     print("===========================================")
     
     try:
@@ -110,13 +130,14 @@ def run_robot():
         ws_set = ss.worksheet("システム設定")
         set_data = {str(r['Key']): str(r['Value']) for r in ws_set.get_all_records()}
         
-        base_prices = {}
+        base_info = {}
+        token = ""
         if set_data.get("CLIENT_ID") and set_data.get("BASE_REFRESH_TOKEN"):
             print("🔑 BASE APIトークンを更新・取得中...")
             token = refresh_base_token(ws_set, set_data["CLIENT_ID"], set_data["CLIENT_SECRET"], set_data["BASE_REFRESH_TOKEN"])
             if token: 
-                base_prices = get_base_items_prices(token)
-                print(f"✅ BASEの価格データを取得完了 ({len(base_prices)}件)")
+                base_info = get_base_items_info(token)
+                print(f"✅ BASEの価格データを取得完了 ({len(base_info)}件)")
 
         db_sheet = ss.worksheet("在庫DB")
         log_sheet = ss.worksheet("価格ログ")
@@ -135,10 +156,14 @@ def run_robot():
                 old_p_raw = row.get('参考相場')
                 old_price = int(old_p_raw) if str(old_p_raw).isdigit() else 0
                 
+                ident = str(row.get('ID'))
+                b_item = base_info.get(ident, {})
+                
                 targets.append({
-                    "row_idx": idx + 2, "id": str(row.get('ID')), "name": str(row.get('商品名')), 
+                    "row_idx": idx + 2, "id": ident, "name": str(row.get('商品名')), 
                     "pack": str(row.get('収録パック')), "url": url, "mode": mode,
-                    "base_price": int(base_prices.get(str(row.get('ID')), 0)),
+                    "base_price": int(b_item.get("price", 0)),
+                    "base_item_id": b_item.get("item_id"),
                     "old_price": old_price
                 })
 
@@ -153,7 +178,6 @@ def run_robot():
         update_cells = []
 
         with sync_playwright() as p:
-            # 💡 【修正点】headless=True に固定し、画面を出さずに裏で処理します
             browser = p.chromium.launch(
                 headless=True,
                 args=['--disable-blink-features=AutomationControlled']
@@ -259,12 +283,22 @@ def run_robot():
                         if diff > 0: trend = "上昇"
                         elif diff < 0: trend = "下降"
 
-                    # === 💡 価格接近アラート (90%ルール) ===
-                    if t['base_price'] > 0:
-                        prox_val = int(t['base_price'] * BASE_PRICE_PROXIMITY_THRESHOLD)
-                        if current_val >= prox_val:
-                            print(f"  ⚠️ 接近検知: スニダン相場(¥{current_val:,})がBASE価格(¥{t['base_price']:,})の90%に達しました。")
-                            msg = f"⚠️ **【価格接近アラート】** {t['name']}\nBASE販売価格: ¥{t['base_price']:,}に対し、\n**スニダン相場が ¥{current_val:,} に達しました** (90%超)\n🔗 {t['url']}"
+                    # === 💡 2段階防衛：価格接近アラート＆自動非表示 ===
+                    if t['base_price'] > 0 and t['base_item_id']:
+                        ratio = current_val / t['base_price']
+                        
+                        if ratio >= BASE_PRICE_PROXIMITY_HIDE:
+                            print(f"  🚨 緊急停止: スニダン相場がBASE価格の95%に達しました。自動非表示を実行します。")
+                            success = hide_base_item(token, t['base_item_id'])
+                            if success:
+                                msg = f"🚨 **【緊急停止・自動非表示化 完了】** {t['name']}\nスニダン相場(¥{current_val:,})がBASE価格(¥{t['base_price']:,})の95%以上に達したため、**BASEでの出品を自動的に「非公開」に変更して保護しました。**\n🔗 {t['url']}"
+                            else:
+                                msg = f"⚠️ **【自動非表示化 失敗】** {t['name']}\n95%以上に達しましたが、BASEのAPI連携に失敗しました。至急、手動で価格設定を確認してください。\n🔗 {t['url']}"
+                            send_discord(msg)
+                            
+                        elif ratio >= BASE_PRICE_PROXIMITY_ALERT:
+                            print(f"  ⚠️ 接近検知: スニダン相場がBASE価格の90%に達しました(通知のみ)。")
+                            msg = f"⚠️ **【価格接近アラート】** {t['name']}\nBASE販売価格: ¥{t['base_price']:,}に対し、\n**スニダン相場が ¥{current_val:,} まで上昇しています** (90%超)\n🔗 {t['url']}"
                             send_discord(msg)
 
                     log_records_to_append.append([
@@ -277,9 +311,9 @@ def run_robot():
                             if str(row.get('商品名')) == t['name'] and str(row.get('収録パック')) == t['pack']:
                                 r_idx = idx + 2
                                 update_cells.append(gspread.Cell(row=r_idx, col=ref_p_col, value=current_val))
-                                item_id = str(row.get('ID'))
-                                if item_id in base_prices:
-                                    update_cells.append(gspread.Cell(row=r_idx, col=base_p_col, value=base_prices[item_id]))
+                                item_id_str = str(row.get('ID'))
+                                if item_id_str in base_info:
+                                    update_cells.append(gspread.Cell(row=r_idx, col=base_p_col, value=base_info[item_id_str]["price"]))
                                 sync_count += 1
                         print(f"  🔄 在庫DB {sync_count} 行分の同期データをセットしました。")
                     else:
@@ -288,14 +322,13 @@ def run_robot():
                     time.sleep(random.uniform(8, 15))
                     
             finally:
-                # 💡 【修正点】プログラム終了時やエラー時でも確実にウィンドウやメモリを解放します
                 print("🧹 メモリ解放・ブラウザ完全終了処理を実行します...")
                 try:
                     if page: page.close()
                     if context: context.close()
                     if browser: browser.close()
                 except Exception as e:
-                    print(f"  ⚠️ 終了処理中に軽微なエラーが発生しましたが、無視して終了します: {e}")
+                    pass
             
             print("\n===========================================")
             print("💾 最終データ書き込みフェーズ")
