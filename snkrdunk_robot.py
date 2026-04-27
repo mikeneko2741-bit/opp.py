@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.8 最終形態：クラス指定型・超精密スクレイピング版)
+# ⚙️ 設定エリア (v10.9 原因究明デバッグ・画面表示モード版)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05  # 前回取得時の相場から「5%」以上の変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.8 起動...")
-    print("🚀 [クラス指定型・超精密スクレイピング版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.9 起動...")
+    print("🚀 [原因究明デバッグ・画面表示モード版]")
     print("===========================================")
     
     try:
@@ -144,20 +144,20 @@ def run_robot():
             return
             
         print(f"🔍 監視対象を {len(targets)} 件発見しました。巡回を開始します...")
-        send_discord(f"🔍 **総合監視開始** (対象: {len(targets)}件)")
 
         log_records_to_append = []
         update_cells = []
 
         with sync_playwright() as p:
-            # 対BANステルス機能搭載
+            # 💡 【デバッグ用】headless=Falseに変更し、実際のブラウザ画面をパソコンに表示させる
             browser = p.chromium.launch(
-                headless=True,
+                headless=False,
                 args=['--disable-blink-features=AutomationControlled']
             )
             
             try:
                 context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                # 画像やフォントの読み込みをブロック（速度向上と通信量節約のため）
                 context.route("**/*", lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
                 page = context.new_page()
                 now = datetime.now()
@@ -172,44 +172,38 @@ def run_robot():
                         try:
                             page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
                             
-                            # 💡 【究極改善】「売買履歴リスト」の親箱が画面に出現するまで待機
                             list_locator = page.locator('ul.sales-history-item-list')
                             list_locator.wait_for(state="visible", timeout=15000)
                             
-                            # リスト内の「行 (li)」をすべて取得
                             history_items = list_locator.locator('li').all()
                             break
-                        except:
+                        except Exception as e:
+                            # 💡 【デバッグ用】何が原因でエラーになったか（タイムアウトか、要素がないか等）をそのまま出力
                             if attempt < MAX_RETRIES - 1:
-                                print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES})")
+                                print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES}) - エラー詳細: {e}")
                                 time.sleep(8 + attempt * 3)
                             else:
-                                print("  ❌ 最終的に取得失敗 → スキップします")
+                                print(f"  ❌ 最終的に取得失敗 → スキップします - エラー詳細: {e}")
 
                     if not history_items:
                         continue
 
                     all_h = []
-                    # 💡 各行の「箱」から直接データを抜き出す
                     for item in history_items:
                         try:
-                            # 念のため、要素が存在するか確認しながら取得
                             date_text = item.locator('.date').inner_text().strip()
                             size_text = item.locator('.size').inner_text().strip()
                             price_text = item.locator('.price').inner_text().strip()
                         except:
-                            # 万が一構造の違う行が混ざっていても安全に無視
                             continue
                             
-                        # === モード別フィルタ ===
                         if t['mode'] == "PSA10":
                             if not re.search(r'PSA\s*(?:10|１０)', size_text, re.IGNORECASE):
                                 continue
-                        else:  # BOXモード
+                        else:
                             if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', size_text, re.IGNORECASE):
                                 continue
                         
-                        # === 価格抽出 ===
                         price_match = re.search(r'¥([\d,]+)', price_text)
                         if price_match:
                             price = int(price_match.group(1).replace(",", ""))
@@ -219,7 +213,7 @@ def run_robot():
                                 print(f"    → 抽出成功: {date_text} | {size_text} | ¥{price:,}")
 
                     if not all_h: 
-                        print("  💤 条件に一致する取引履歴(1個/PSA10)が見つかりませんでした。")
+                        print("  💤 条件に一致する取引履歴が見つかりませんでした。")
                         continue
 
                     all_h.sort(key=lambda x: x['date'], reverse=True)
@@ -228,7 +222,6 @@ def run_robot():
                     
                     print(f"  📊 有効履歴 {len(all_h)} 件から最新相場を算出: ¥{current_val:,} (前回の記録: ¥{t['old_price']:,})")
 
-                    # パーセンテージ（5%）変動アラート
                     diff = current_val - t['old_price']
                     trend = "安定"
                     threshold_val = int(t['old_price'] * CHANGE_NOTIFY_PERCENT)
@@ -236,20 +229,16 @@ def run_robot():
                     if t['old_price'] > 0 and abs(diff) >= threshold_val:
                         if diff > 0:
                             trend = "上昇"
-                            print(f"  🔔 {threshold_val:,}円(5%)以上の高騰を検知！Discordに通知を送ります。")
-                            msg = f"📈 **【{t['mode']}高騰】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (+¥{diff:,})\n🔗 {t['url']}"
-                            send_discord(msg)
+                            print(f"  🔔 {threshold_val:,}円(5%)以上の高騰を検知！Discordに通知は[デバッグ中はOFF]")
                         else:
                             trend = "下降"
-                            print(f"  🔔 {threshold_val:,}円(5%)以上の下落を検知！Discordに通知を送ります。")
-                            msg = f"📉 **【{t['mode']}暴落】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (-¥{abs(diff):,})\n🔗 {t['url']}"
-                            send_discord(msg)
+                            print(f"  🔔 {threshold_val:,}円(5%)以上の下落を検知！Discordに通知は[デバッグ中はOFF]")
                     elif t['old_price'] == 0:
-                        print("  ➖ 初回取得のため、通知はスキップします。")
+                        print("  ➖ 初回取得のため、通知判定なし。")
                     else:
                         if diff > 0: trend = "上昇"
                         elif diff < 0: trend = "下降"
-                        print(f"  ➖ 変動幅が5%({threshold_val:,}円)未満のため、通知はスキップしました。")
+                        print(f"  ➖ 変動幅が5%({threshold_val:,}円)未満のため、通知判定なし。")
 
                     log_records_to_append.append([
                         now_str, t['id'], t['name'], t['base_price'], current_val, trend, t['url']
@@ -286,10 +275,7 @@ def run_robot():
             if log_records_to_append:
                 log_sheet.append_rows(log_records_to_append)
                 print(f"✅ 価格ログシートに {len(log_records_to_append)} 件の記録を追加しました。")
-            else:
-                print("ℹ️ 今回記録する価格ログはありませんでした。")
 
-            send_discord("✅ **総合監視完了**")
             print("🏁 全巡回完了")
             print("===========================================")
             
