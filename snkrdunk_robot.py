@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.11 完全抽出・生データ実況・PSA10最適化版)
+# ⚙️ 設定エリア (v10.12 セレクタ修正・PSA10厳格フィルター復活版)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05  # 前回取得時の相場から「5%」以上の変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.11 起動...")
-    print("🚀 [完全抽出・生データ実況・PSA10最適化版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.12 起動...")
+    print("🚀 [セレクタ修正・PSA10厳格フィルター復活版]")
     print("===========================================")
     
     try:
@@ -149,7 +149,7 @@ def run_robot():
         update_cells = []
 
         with sync_playwright() as p:
-            # デバッグ用に画面を表示させたまま実行
+            # 引き続きデバッグ用に画面を表示させます
             browser = p.chromium.launch(
                 headless=False,
                 args=['--disable-blink-features=AutomationControlled']
@@ -177,14 +177,14 @@ def run_robot():
                             page.evaluate("window.scrollBy(0, 800)")
                             time.sleep(2)
                             
-                            # クラスを直接指定してリスト全体を待機
-                            list_locator = page.locator('.sales-history-item-list').first
+                            # 💡 【修正】正しいHTMLクラス名（スペースを考慮した形式）で指定
+                            list_locator = page.locator('ul.sales-history.item-list').first
                             list_locator.wait_for(state="attached", timeout=15000)
                             
                             break
                         except Exception as e:
                             if attempt < MAX_RETRIES - 1:
-                                print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES})")
+                                print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES}) - エラー詳細: {e}")
                                 time.sleep(5)
                             else:
                                 print(f"  ❌ 最終的に取得失敗 → スキップします")
@@ -193,29 +193,30 @@ def run_robot():
                         continue
 
                     all_h = []
-                    # 💡 【重要】リスト内の行(li)をカウントして直接アクセスする
+                    # リスト内の行(li)を取得
                     row_count = list_locator.locator('li').count()
                     
                     for j in range(row_count):
                         item = list_locator.locator('li').nth(j)
                         try:
-                            # inner_text の罠を回避し、text_content で強制取得
+                            # text_content で強制取得
                             date_text = item.locator('.date').text_content().strip()
                             size_text = item.locator('.size').text_content().strip()
                             price_text = item.locator('.price').text_content().strip()
                         except:
                             continue
                         
-                        # 生データの実況（最初の5件だけ表示してログが長くなりすぎるのを防ぐ）
                         if j < 5:
                             print(f"    [🔍 生データ抽出] 日付:{date_text} | サイズ:{size_text} | 価格:{price_text}")
                             
-                        # === モード別フィルタ ===
+                        # 💡 【修正】PSA10厳格フィルターの復活
                         if t['mode'] == "PSA10":
-                            # PSA10ページは全履歴がPSA10なのでサイズ欄チェックをスキップ
-                            pass
+                            if not re.search(r'PSA\s*(?:10|１０)', size_text, re.IGNORECASE):
+                                if j < 5: print(f"      ✖️ PSA10ではないため除外しました")
+                                continue
                         else:  # BOXモード
                             if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', size_text, re.IGNORECASE):
+                                if j < 5: print(f"      ✖️ BOX条件(1個)に合致しないため除外しました")
                                 continue
                         
                         # === 価格抽出 ===
@@ -225,12 +226,11 @@ def run_robot():
                             dt = parse_snkrdunk_date(date_text, now)
                             if dt:
                                 all_h.append({"date": dt, "price": price})
-                                # 抽出に成功したものを表示
                                 if j < 5:
                                     print(f"      ✅ 条件クリア: ¥{price:,} として登録")
 
                     if not all_h: 
-                        print("  💤 条件に一致する取引履歴(1個のみ)が見つかりませんでした。")
+                        print("  💤 条件に一致する取引履歴が見つかりませんでした。")
                         continue
 
                     all_h.sort(key=lambda x: x['date'], reverse=True)
