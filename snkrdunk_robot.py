@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.4 実況・厳格抽出・隠しテキスト全取得版)
+# ⚙️ 設定エリア (v10.5 超精密ブロック分割・異常値完全排除版)
 # =========================================================
 CHANGE_NOTIFY_THRESHOLD = 500  # 前回取得時の相場から500円以上変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.4 起動...")
-    print("🚀 [隠しテキスト全取得・実況・強制ログ記録版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.5 起動...")
+    print("🚀 [超精密ブロック分割・異常値完全排除版]")
     print("===========================================")
     
     try:
@@ -124,13 +124,11 @@ def run_robot():
         base_p_col = header.index("BASE販売価格") + 1
         ref_p_col = header.index("参考相場") + 1
         
-        # 💡 URLが貼ってある「代表行」を抽出し、前回の相場(old_price)も保持する
         targets = []
         for idx, row in enumerate(records):
             url = str(row.get('スニダンURL', '')).strip()
             if row.get('ステータス') != '売却済み' and url.startswith('http'):
                 mode = "PSA10" if "10" in str(row.get('状態_PSA')) else "BOX"
-                # 参考相場が空欄の場合は0とする
                 old_p_raw = row.get('参考相場')
                 old_price = int(old_p_raw) if str(old_p_raw).isdigit() else 0
                 
@@ -142,7 +140,7 @@ def run_robot():
                 })
 
         if not targets: 
-            print("✅ 監視対象(スニダンURL)が在庫DBに見つかりません。終了します。")
+            print("✅ 監視対象が見つかりません。終了します。")
             return
             
         print(f"🔍 監視対象を {len(targets)} 件発見しました。巡回を開始します...")
@@ -166,7 +164,7 @@ def run_robot():
                     try:
                         page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
                         page.wait_for_selector('text=最近の売買履歴', state="visible", timeout=10000)
-                        # 💡 【改修ポイント】画面に見えていなくても裏側にあるテキストを根こそぎ取得する
+                        # 裏側のテキストをすべて取得
                         page_text = page.locator("body").text_content()
                         break
                     except:
@@ -178,23 +176,39 @@ def run_robot():
                     print("  ❌ サイトの取得に失敗しました。この商品はスキップします。")
                     continue
 
-                # 💡 【ズレ防止の厳格抽出ロジック】
-                # [^¥]*? を挟むことで、「日付から金額(¥)までの間に、別の金額(¥)が絶対に存在しない」ことを保証する。
-                if t['mode'] == "PSA10":
-                    pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)\s*[^¥]*?PSA\s*(?:10|１０)[^¥]*?¥([\d,]+)'
-                else:
-                    pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)\s*[^¥]*?(?<!\d)1個(?!\d)[^¥]*?¥([\d,]+)'
-
-                matches = re.findall(pattern, page_text, re.IGNORECASE)
+                # 💡 【v10.5 ブロック分割法】
+                # まず、テキストを「日付」の場所でハサミで切り刻み、1件1件の取引ブロックに小分けにする
+                date_pattern = r'(\d+[秒分時間日]前|\d{2,4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)'
+                parts = re.split(date_pattern, page_text)
+                
                 all_h = []
-                for m in matches:
-                    dt = parse_snkrdunk_date(m[0], now)
-                    if dt: all_h.append({"date": dt, "price": int(m[1].replace(",", ""))})
+                # parts は [ゴミテキスト, 日付1, ブロック1, 日付2, ブロック2...] という配列になる
+                for j in range(1, len(parts) - 1, 2):
+                    date_str = parts[j]
+                    # 次の日付までのテキスト（最大150文字に制限して、ページ下部の巨大数字を絶対に巻き込まない）
+                    chunk = parts[j+1][:150]
+                    
+                    # ブロック内に「PSA10」または「1個」があるか判定
+                    if t['mode'] == "PSA10":
+                        if not re.search(r'PSA\s*(?:10|１０)', chunk, re.IGNORECASE):
+                            continue
+                    else:
+                        if not re.search(r'(?<!\d)1個(?!\d)', chunk):
+                            continue
+                    
+                    # ブロック内にある「¥」の金額だけを抽出
+                    price_match = re.search(r'¥([\d,]+)', chunk)
+                    if price_match:
+                        dt = parse_snkrdunk_date(date_str, now)
+                        if dt:
+                            price = int(price_match.group(1).replace(",", ""))
+                            all_h.append({"date": dt, "price": price})
 
                 if not all_h: 
                     print("  💤 条件に一致する取引履歴(1個/PSA10)が見つかりませんでした。")
                     continue
 
+                # 日付順に並び替え、直近10件のうち異常な高値（1.8倍以上）を弾く
                 all_h.sort(key=lambda x: x['date'], reverse=True)
                 latest_10 = filter_abnormal_prices([x['price'] for x in all_h[:10]])
                 current_val = sum(latest_10) // len(latest_10) if latest_10 else all_h[0]['price']
@@ -202,7 +216,7 @@ def run_robot():
                 print(f"  📊 履歴から {len(all_h)} 件のデータを抽出しました。")
                 print(f"  💰 最新相場: ¥{current_val:,} (前回の記録: ¥{t['old_price']:,})")
 
-                # 💡 自己比較アラートロジック (500円以上の変動で通知)
+                # 自己比較アラートロジック
                 diff = current_val - t['old_price']
                 trend = "安定"
                 
@@ -222,15 +236,13 @@ def run_robot():
                 else:
                     if diff > 0: trend = "上昇"
                     elif diff < 0: trend = "下降"
-                    print(f"  ➖ 変動幅が基準({CHANGE_NOTIFY_THRESHOLD}円)未満のため、通知はスキップしました。")
+                    print(f"  ➖ 変動幅が基準未満のため、通知はスキップしました。")
 
-                # 💡 価格ログへ記録するデータを強制準備
                 log_records_to_append.append([
                     now_str, t['id'], t['name'], t['base_price'], current_val, trend, t['url']
                 ])
                 print("  📝 この商品の価格ログ追加を予約しました。")
 
-                # 💡 同一商品の全在庫を一括同期
                 sync_count = 0
                 for idx, row in enumerate(records):
                     if str(row.get('商品名')) == t['name'] and str(row.get('収録パック')) == t['pack']:
@@ -243,7 +255,6 @@ def run_robot():
                 
                 print(f"  🔄 在庫DB {sync_count} 行分の同期データをセットしました。")
                 
-                # IPバン対策の安全待機
                 wait_time = random.uniform(8, 15)
                 print(f"  ⏳ サイト負荷軽減のため {wait_time:.1f} 秒待機します...\n")
                 time.sleep(wait_time)
@@ -258,7 +269,6 @@ def run_robot():
                 print(f"✅ 在庫DBを一括更新しました ({len(update_cells)//2}箇所)")
             
             if log_records_to_append:
-                # APIの負荷を減らすため、全商品のログを最後に1回でまとめて追記する
                 log_sheet.append_rows(log_records_to_append)
                 print(f"✅ 価格ログシートに {len(log_records_to_append)} 件の記録を追加しました。")
             else:
