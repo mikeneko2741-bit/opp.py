@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v11.2 価格接近アラート ＆ ゆでガエル防止版)
+# ⚙️ 設定エリア (v11.3 完全クリーンアップ＆バックグラウンド稼働版)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05        # 3万円未満の商品：前回から「5%」以上の変動で通知
 HIGH_PRICE_THRESHOLD = 30000        # 高額商品の基準（3万円）
@@ -98,8 +98,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.2 起動...")
-    print("🚀 [本番稼働用：価格接近アラート ＆ ゆでガエル防止版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.3 起動...")
+    print("🚀 [本番稼働用：完全クリーンアップ＆バックグラウンド稼働版]")
     print("===========================================")
     
     try:
@@ -153,10 +153,13 @@ def run_robot():
         update_cells = []
 
         with sync_playwright() as p:
+            # 💡 【修正点】headless=True に固定し、画面を出さずに裏で処理します
             browser = p.chromium.launch(
                 headless=True,
                 args=['--disable-blink-features=AutomationControlled']
             )
+            context = None
+            page = None
             
             try:
                 context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
@@ -268,7 +271,6 @@ def run_robot():
                         now_str, t['id'], t['name'], t['base_price'], current_val, trend, t['url']
                     ])
                     
-                    # 更新条件：初回 or 変動アラート発火時のみ (接近アラート時は上書きしない)
                     if is_first_time or is_market_alert:
                         sync_count = 0
                         for idx, row in enumerate(records):
@@ -286,7 +288,14 @@ def run_robot():
                     time.sleep(random.uniform(8, 15))
                     
             finally:
-                browser.close()
+                # 💡 【修正点】プログラム終了時やエラー時でも確実にウィンドウやメモリを解放します
+                print("🧹 メモリ解放・ブラウザ完全終了処理を実行します...")
+                try:
+                    if page: page.close()
+                    if context: context.close()
+                    if browser: browser.close()
+                except Exception as e:
+                    print(f"  ⚠️ 終了処理中に軽微なエラーが発生しましたが、無視して終了します: {e}")
             
             print("\n===========================================")
             print("💾 最終データ書き込みフェーズ")
