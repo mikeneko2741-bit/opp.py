@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v10.9 原因究明デバッグ・画面表示モード版)
+# ⚙️ 設定エリア (v10.10 スクロール誘発・完全取得版)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05  # 前回取得時の相場から「5%」以上の変動で通知
 HISTORY_HOURS = 24
@@ -95,8 +95,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.9 起動...")
-    print("🚀 [原因究明デバッグ・画面表示モード版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v10.10 起動...")
+    print("🚀 [原因究明デバッグ・スクロール誘発版]")
     print("===========================================")
     
     try:
@@ -149,7 +149,7 @@ def run_robot():
         update_cells = []
 
         with sync_playwright() as p:
-            # 💡 【デバッグ用】headless=Falseに変更し、実際のブラウザ画面をパソコンに表示させる
+            # 💡 【デバッグ用】画面を表示させたまま実行します
             browser = p.chromium.launch(
                 headless=False,
                 args=['--disable-blink-features=AutomationControlled']
@@ -157,7 +157,6 @@ def run_robot():
             
             try:
                 context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                # 画像やフォントの読み込みをブロック（速度向上と通信量節約のため）
                 context.route("**/*", lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
                 page = context.new_page()
                 now = datetime.now()
@@ -172,16 +171,24 @@ def run_robot():
                         try:
                             page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
                             
-                            list_locator = page.locator('ul.sales-history-item-list')
-                            list_locator.wait_for(state="visible", timeout=15000)
+                            # 💡 【重要対策】遅延読み込み（Lazy Load）を強制的に呼び起こすため、画面を下にスクロールする
+                            page.evaluate("window.scrollBy(0, 800)")
+                            time.sleep(1)
+                            page.evaluate("window.scrollBy(0, 800)")
+                            time.sleep(2)
                             
-                            history_items = list_locator.locator('li').all()
+                            # クラス名の揺れ（スペース有無など）に対応するため、包含検索に変更
+                            list_locator = page.locator('ul[class*="sales-history"]')
+                            
+                            # 要素がDOM内にアタッチされる（作られる）のを待機
+                            list_locator.first.wait_for(state="attached", timeout=15000)
+                            
+                            history_items = list_locator.first.locator('li').all()
                             break
                         except Exception as e:
-                            # 💡 【デバッグ用】何が原因でエラーになったか（タイムアウトか、要素がないか等）をそのまま出力
                             if attempt < MAX_RETRIES - 1:
                                 print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES}) - エラー詳細: {e}")
-                                time.sleep(8 + attempt * 3)
+                                time.sleep(5)
                             else:
                                 print(f"  ❌ 最終的に取得失敗 → スキップします - エラー詳細: {e}")
 
