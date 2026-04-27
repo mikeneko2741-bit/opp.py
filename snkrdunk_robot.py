@@ -12,11 +12,12 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v11.1 ゆでガエル防止 ＆ 高額帯1000円固定アラート版)
+# ⚙️ 設定エリア (v11.2 価格接近アラート ＆ ゆでガエル防止版)
 # =========================================================
-CHANGE_NOTIFY_PERCENT = 0.05  # 3万円未満の商品：前回取得時の相場から「5%」以上の変動で通知
-HIGH_PRICE_THRESHOLD = 30000  # 高額商品の基準（3万円）
-HIGH_PRICE_FLUCTUATION = 1000 # 3万円以上の商品：前回取得時の相場から「1,000円」以上の変動で通知
+CHANGE_NOTIFY_PERCENT = 0.05        # 3万円未満の商品：前回から「5%」以上の変動で通知
+HIGH_PRICE_THRESHOLD = 30000        # 高額商品の基準（3万円）
+HIGH_PRICE_FLUCTUATION = 1000       # 3万円以上の商品：前回から「1,000円」以上の変動で通知
+BASE_PRICE_PROXIMITY_THRESHOLD = 0.90 # スニダン相場がBASE価格の「90%」以上で通知
 HISTORY_HOURS = 24
 MAX_RETRIES = 2
 SPREADSHEET_NAME = "ぽっけぇ〜道_システムv3"
@@ -97,8 +98,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.1 起動...")
-    print("🚀 [本番稼働用：ゆでガエル完全防止＆ハイブリッド閾値版]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.2 起動...")
+    print("🚀 [本番稼働用：価格接近アラート ＆ ゆでガエル防止版]")
     print("===========================================")
     
     try:
@@ -152,7 +153,6 @@ def run_robot():
         update_cells = []
 
         with sync_playwright() as p:
-            # 本番用は headless=True でバックグラウンド稼働
             browser = p.chromium.launch(
                 headless=True,
                 args=['--disable-blink-features=AutomationControlled']
@@ -169,21 +169,17 @@ def run_robot():
                     print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
                     
                     list_locator = None
-                    
                     for attempt in range(MAX_RETRIES):
                         try:
                             page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
-                            
                             page.evaluate("window.scrollBy(0, 800)")
                             time.sleep(1)
                             page.evaluate("window.scrollBy(0, 800)")
                             time.sleep(2)
-                            
                             list_locator = page.locator('ul.sales-history.item-list').first
                             list_locator.wait_for(state="attached", timeout=15000)
-                            
                             break
-                        except Exception as e:
+                        except:
                             if attempt < MAX_RETRIES - 1:
                                 print(f"  ⚠️ ページ読み込み失敗 (試行 {attempt+1}/{MAX_RETRIES})")
                                 time.sleep(5)
@@ -210,11 +206,9 @@ def run_robot():
                             
                         if t['mode'] == "PSA10":
                             if not re.search(r'PSA\s*(?:10|１０)', size_text, re.IGNORECASE):
-                                if j < 5: print(f"      ✖️ PSA10ではないため除外しました")
                                 continue
                         else:
                             if not re.search(r'(?<!\d)1個(?!\d)|BOX|未開封', size_text, re.IGNORECASE):
-                                if j < 5: print(f"      ✖️ BOX条件(1個)に合致しないため除外しました")
                                 continue
                         
                         price_match = re.search(r'¥([\d,]+)', price_text)
@@ -223,8 +217,6 @@ def run_robot():
                             dt = parse_snkrdunk_date(date_text, now)
                             if dt:
                                 all_h.append({"date": dt, "price": price})
-                                if j < 5:
-                                    print(f"      ✅ 条件クリア: ¥{price:,} として登録")
 
                     if not all_h: 
                         print("  💤 条件に一致する取引履歴が見つかりませんでした。")
@@ -236,11 +228,10 @@ def run_robot():
                     
                     print(f"  📊 有効履歴 {len(all_h)} 件から最新相場を算出: ¥{current_val:,} (前回の記録: ¥{t['old_price']:,})")
 
-                    # === ハイブリッド閾値とゆでガエル防止ロジック ===
+                    # === 変動アラート ＆ ゆでガエル防止ロジック ===
                     diff = current_val - t['old_price']
                     trend = "安定"
                     
-                    # 閾値の計算 (3万円以上は1000円固定、3万円未満は5%)
                     if t['old_price'] >= HIGH_PRICE_THRESHOLD:
                         threshold_val = HIGH_PRICE_FLUCTUATION
                         threshold_msg = f"{HIGH_PRICE_FLUCTUATION:,}円"
@@ -248,36 +239,37 @@ def run_robot():
                         threshold_val = int(t['old_price'] * CHANGE_NOTIFY_PERCENT)
                         threshold_msg = f"5%({threshold_val:,}円)"
 
-                    is_alert = False
+                    is_market_alert = False
                     is_first_time = (t['old_price'] == 0)
 
-                    if is_first_time:
-                        print("  ➖ 初回取得のため、通知判定はありません。")
-                    elif abs(diff) >= threshold_val:
-                        is_alert = True
+                    if not is_first_time and abs(diff) >= threshold_val:
+                        is_market_alert = True
                         if diff > 0:
                             trend = "上昇"
-                            print(f"  🔔 {threshold_msg}以上の高騰を検知！Discordに通知を送ります。")
                             msg = f"📈 **【{t['mode']}高騰】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (+¥{diff:,})\n🔗 {t['url']}"
                             send_discord(msg)
                         else:
                             trend = "下降"
-                            print(f"  🔔 {threshold_msg}以上の下落を検知！Discordに通知を送ります。")
                             msg = f"📉 **【{t['mode']}暴落】** {t['name']}\n前回: ¥{t['old_price']:,} ➡️ **最新: ¥{current_val:,}** (-¥{abs(diff):,})\n🔗 {t['url']}"
                             send_discord(msg)
                     else:
                         if diff > 0: trend = "上昇"
                         elif diff < 0: trend = "下降"
-                        print(f"  ➖ 変動幅が{threshold_msg}未満(現在変動: {abs(diff):,}円)のため、通知をスキップします。")
 
-                    # === 価格ログの記録 (毎回必ず記録) ===
+                    # === 💡 価格接近アラート (90%ルール) ===
+                    if t['base_price'] > 0:
+                        prox_val = int(t['base_price'] * BASE_PRICE_PROXIMITY_THRESHOLD)
+                        if current_val >= prox_val:
+                            print(f"  ⚠️ 接近検知: スニダン相場(¥{current_val:,})がBASE価格(¥{t['base_price']:,})の90%に達しました。")
+                            msg = f"⚠️ **【価格接近アラート】** {t['name']}\nBASE販売価格: ¥{t['base_price']:,}に対し、\n**スニダン相場が ¥{current_val:,} に達しました** (90%超)\n🔗 {t['url']}"
+                            send_discord(msg)
+
                     log_records_to_append.append([
                         now_str, t['id'], t['name'], t['base_price'], current_val, trend, t['url']
                     ])
-                    print("  📝 この商品の価格ログ追加を予約しました。")
-
-                    # === 在庫DBの更新 (ゆでガエル防止：初回 or アラート発火時のみ更新) ===
-                    if is_first_time or is_alert:
+                    
+                    # 更新条件：初回 or 変動アラート発火時のみ (接近アラート時は上書きしない)
+                    if is_first_time or is_market_alert:
                         sync_count = 0
                         for idx, row in enumerate(records):
                             if str(row.get('商品名')) == t['name'] and str(row.get('収録パック')) == t['pack']:
@@ -287,31 +279,23 @@ def run_robot():
                                 if item_id in base_prices:
                                     update_cells.append(gspread.Cell(row=r_idx, col=base_p_col, value=base_prices[item_id]))
                                 sync_count += 1
-                        print(f"  🔄 在庫DB {sync_count} 行分の同期データ(最新相場)をセットしました。")
+                        print(f"  🔄 在庫DB {sync_count} 行分の同期データをセットしました。")
                     else:
-                        print("  💤 基準相場維持のため、在庫DB(参考相場)の更新は行いません(ゆでガエル防止)。")
+                        print(f"  💤 基準相場維持のため、在庫DBの更新は行いません。")
                     
-                    wait_time = random.uniform(8, 15)
-                    print(f"  ⏳ サイト負荷軽減のため {wait_time:.1f} 秒待機します...\n")
-                    time.sleep(wait_time)
+                    time.sleep(random.uniform(8, 15))
                     
             finally:
-                print("🧹 メモリ解放処理(ブラウザのクローズ)を実行します...")
                 browser.close()
             
             print("\n===========================================")
             print("💾 最終データ書き込みフェーズ")
-            
             if update_cells:
                 db_sheet.update_cells(update_cells)
                 print(f"✅ 在庫DBを一括更新しました ({len(update_cells)//2}箇所)")
-            else:
-                print("✅ 今回、在庫DBで更新が必要な相場変動はありませんでした。")
-            
             if log_records_to_append:
                 log_sheet.append_rows(log_records_to_append)
                 print(f"✅ 価格ログシートに {len(log_records_to_append)} 件の記録を追加しました。")
-
             send_discord("✅ **総合監視完了**")
             print("🏁 全巡回完了")
             print("===========================================")
