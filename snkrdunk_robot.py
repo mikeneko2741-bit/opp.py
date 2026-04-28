@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v11.4 最終防衛ライン：90%接近アラート＆95%自動非表示)
+# ⚙️ 設定エリア (v11.5 ちょうどいいエラーリカバリー＆緊急アラート搭載)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05        # 3万円未満の商品：前回から「5%」以上の変動で通知
 HIGH_PRICE_THRESHOLD = 30000        # 高額商品の基準（3万円）
@@ -20,7 +20,8 @@ HIGH_PRICE_FLUCTUATION = 1000       # 3万円以上の商品：前回から「1,
 BASE_PRICE_PROXIMITY_ALERT = 0.90   # スニダン相場がBASE価格の「90%」以上で警告通知
 BASE_PRICE_PROXIMITY_HIDE = 0.95    # スニダン相場がBASE価格の「95%」以上で緊急通知 ＆ 自動非表示
 HISTORY_HOURS = 24
-MAX_RETRIES = 2
+MAX_RETRIES = 3                     # スニダンとBASEの通信エラー時の最大再試行回数（軽傷の自己修復）
+CONSECUTIVE_FAILURES_LIMIT = 5      # スニダン連続取得失敗によるBAN判定の閾値
 SPREADSHEET_NAME = "ぽっけぇ〜道_システムv3"
 JSON_KEY_FILE = "secrets.json"
 # =========================================================
@@ -62,7 +63,6 @@ def refresh_base_token(ws_set, client_id, client_secret, refresh_token):
     except: return ""
 
 def get_base_items_info(access_token):
-    # 💡 【改修】価格だけでなく、商品を操作するための「内部ID」も同時に取得する
     base_info = {}; offset = 0
     while True:
         url = f"https://api.thebase.in/1/items?limit=100&offset={offset}"
@@ -75,7 +75,7 @@ def get_base_items_info(access_token):
                     if ident: 
                         base_info[ident] = {
                             "price": item.get("price", 0),
-                            "item_id": item.get("item_id") # 非表示操作に必要
+                            "item_id": item.get("item_id")
                         }
                 if len(items) < 100: break
                 offset += 100
@@ -83,17 +83,22 @@ def get_base_items_info(access_token):
     return base_info
 
 def hide_base_item(access_token, item_id):
-    # 💡 【新規】BASEの対象商品を強制的に「非表示(visible=0)」に書き換える
+    # 💡 軽傷リカバリー：エラーが起きても最大3回まで自力で再挑戦する
     url = "https://api.thebase.in/1/items/edit"
     params = {"item_id": item_id, "visible": 0}
     req = urllib.request.Request(url, data=urlencode(params).encode(), method="POST")
     req.add_header("Authorization", f"Bearer {access_token}")
-    try:
-        with urllib.request.urlopen(req) as res:
-            return True
-    except Exception as e:
-        print(f"  ⚠️ BASE APIエラー (非表示化失敗): {e}")
-        return False
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req) as res:
+                return True
+        except Exception as e:
+            print(f"  ⚠️ BASE APIエラー (非表示化失敗 - 試行 {attempt+1}/{MAX_RETRIES}): {e}")
+            time.sleep(3) # 3秒待ってから再挑戦
+    
+    # 3回やってもダメだった場合は完全に失敗とみなす
+    return False
 
 def parse_snkrdunk_date(date_str, now):
     try:
@@ -118,8 +123,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.4 起動...")
-    print("🚀 [最終防衛ライン：2段階接近アラート＆自動非表示機能搭載]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.5 起動...")
+    print("🚀 [ちょうどいいエラーリカバリー＆緊急アラート搭載]")
     print("===========================================")
     
     try:
@@ -176,6 +181,7 @@ def run_robot():
 
         log_records_to_append = []
         update_cells = []
+        consecutive_failures = 0 # BAN検知用のカウンター
 
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -196,6 +202,7 @@ def run_robot():
                     print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
                     
                     list_locator = None
+                    # 💡 軽傷リカバリー：スニダン取得も最大3回まで再挑戦
                     for attempt in range(MAX_RETRIES):
                         try:
                             page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
@@ -214,7 +221,16 @@ def run_robot():
                                 print(f"  ❌ 最終的に取得失敗 → スキップします")
 
                     if not list_locator:
+                        # 🚨 致命傷②：連続アクセス失敗によるBAN検知
+                        consecutive_failures += 1
+                        if consecutive_failures >= CONSECUTIVE_FAILURES_LIMIT:
+                            msg = "🚨 @everyone 【緊急停止】スニダンからアクセス拒否(BAN)された可能性があります。安全のためBOTを強制終了します。"
+                            print(f"\n{msg}")
+                            send_discord(msg)
+                            break # 全体のループを抜けて強制終了
                         continue
+                    else:
+                        consecutive_failures = 0 # 成功したらカウンターをリセット
 
                     all_h = []
                     row_count = list_locator.locator('li').count()
@@ -261,10 +277,8 @@ def run_robot():
                     
                     if t['old_price'] >= HIGH_PRICE_THRESHOLD:
                         threshold_val = HIGH_PRICE_FLUCTUATION
-                        threshold_msg = f"{HIGH_PRICE_FLUCTUATION:,}円"
                     else:
                         threshold_val = int(t['old_price'] * CHANGE_NOTIFY_PERCENT)
-                        threshold_msg = f"5%({threshold_val:,}円)"
 
                     is_market_alert = False
                     is_first_time = (t['old_price'] == 0)
@@ -293,7 +307,8 @@ def run_robot():
                             if success:
                                 msg = f"🚨 **【緊急停止・自動非表示化 完了】** {t['name']}\nスニダン相場(¥{current_val:,})がBASE価格(¥{t['base_price']:,})の95%以上に達したため、**BASEでの出品を自動的に「非公開」に変更して保護しました。**\n🔗 {t['url']}"
                             else:
-                                msg = f"⚠️ **【自動非表示化 失敗】** {t['name']}\n95%以上に達しましたが、BASEのAPI連携に失敗しました。至急、手動で価格設定を確認してください。\n🔗 {t['url']}"
+                                # 🚨 致命傷①：BASE防衛失敗による緊急メンション
+                                msg = f"🚨 @everyone **【致命的エラー・自動非表示化 失敗】** {t['name']}\n相場が95%以上に達しましたが、BASEの通信エラーにより商品の取り下げに失敗しました！\n**至急、手動でBASEを非公開にしてください！**\n🔗 {t['url']}"
                             send_discord(msg)
                             
                         elif ratio >= BASE_PRICE_PROXIMITY_ALERT:
