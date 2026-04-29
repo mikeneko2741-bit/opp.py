@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.62 - ラベル印字名最適化版)
+# ⚙️ 設定・定数 (v5.63 - ラベルリスト最新仕入順ソート版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -552,10 +552,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.62)
+# 🖥️ アプリ画面 (v5.63)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.62")
+st.title("🎴 ぽっけぇ～道 管理システム v5.63")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -740,7 +740,7 @@ if menu == "📦 スピード仕入・解体":
                                 recs = [{'ID': "S"+uuid.uuid4().hex[:8], '元の在庫ID': b_id, '売却日': datetime.now().strftime('%Y-%m-%d'), '商品名': parent_row['商品名'], '収録パック': parent_row['収録パック'], '状態_PSA': parent_row['状態_PSA'], '売却数': 1, '売上額': 0, '手数料': 0, '経費_送料': 0, '純利益': 0, '販路': 'システム：解体消費', '備考': '解体', '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
                                 save_sales_data(pd.concat([df_sales_b, pd.DataFrame(recs)], ignore_index=True))
                                 
-                                new_rows_b, p_date = [], datetime.now().strftime('%Y-%m-%d')
+                                new_rows_b, p_date = datetime.now().strftime('%Y-%m-%d'), []
                                 for r in calc_break:
                                     orig_item = next(i for i in st.session_state['app']['dismantle_cart'] if i['id'] == r['ID'])
                                     for _ in range(r['数量']):
@@ -928,7 +928,7 @@ elif menu == "📊 在庫・PSA管理":
                 st.button("🚨 原価再計算", on_click=recalculate_moving_average_costs)
 
 # =========================================================
-# 🖨️ 第3フェーズ：個別管理・ラベル (🌟v5.62で改修・最適化🌟)
+# 🖨️ 第3フェーズ：個別管理・ラベル (🌟v5.63で改修・最適化🌟)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -936,13 +936,16 @@ elif menu == "🖨️ 個別管理・ラベル":
     if df is not None:
         if not df.empty:
             df_act = df[(df['ステータス'] == '在庫あり') & (df['在庫数'] == 1)].copy()
+            
+            # ▼ 追加：スプレッドシートの下（新しく追加されたもの）から順に表示するように並び替え
+            df_act = df_act.iloc[::-1]
+            
             search_l = st.text_input("🔍 商品名で検索", key="sl")
             if search_l: df_act = df_act[df_act['商品名'].str.contains(search_l, na=False)]
             if df_act.empty: st.info("ラベル印刷の対象となる個別在庫がありません。")
             else:
                 df_act['印刷対象'] = False
                 
-                # ▼ 追加：不要な接頭辞を自動カットした「印字用商品名」を生成
                 def get_label_name(name):
                     n = str(name)
                     for w in ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]: 
@@ -980,7 +983,6 @@ elif menu == "🖨️ 個別管理・ラベル":
                     items = []
                     for _, r in sel_p.iterrows():
                         item_dict = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict()
-                        # ▼ 短くした名前（または手動で編集した名前）を適用
                         item_dict['商品名'] = r['印字用商品名']
                         item_dict['個別メモ'] = r['個別メモ']
                         item_dict['重量'] = r['重量']
