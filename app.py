@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.61 - 軽量・大掃除版)
+# ⚙️ 設定・定数 (v5.62 - ラベル印字名最適化版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -552,10 +552,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.61)
+# 🖥️ アプリ画面 (v5.62)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.61")
+st.title("🎴 ぽっけぇ～道 管理システム v5.62")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -928,7 +928,7 @@ elif menu == "📊 在庫・PSA管理":
                 st.button("🚨 原価再計算", on_click=recalculate_moving_average_costs)
 
 # =========================================================
-# 🖨️ 第3フェーズ：個別管理・ラベル
+# 🖨️ 第3フェーズ：個別管理・ラベル (🌟v5.62で改修・最適化🌟)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -941,11 +941,28 @@ elif menu == "🖨️ 個別管理・ラベル":
             if df_act.empty: st.info("ラベル印刷の対象となる個別在庫がありません。")
             else:
                 df_act['印刷対象'] = False
+                
+                # ▼ 追加：不要な接頭辞を自動カットした「印字用商品名」を生成
+                def get_label_name(name):
+                    n = str(name)
+                    for w in ["拡張パック", "強化", "ハイクラスパック", "構築済みデッキ", "プレミアムトレーナーボックス", "スペシャルセット"]: 
+                        n = n.replace(w, "")
+                    return n.strip()
+                df_act['印字用商品名'] = df_act['商品名'].apply(get_label_name)
+
                 st.markdown("##### 📝 1. 情報の編集と印刷対象の選択")
+                st.caption("💡 「ラベル印字名」はシステムが自動で短くしています。ここで手動で書き換えても元の在庫データは変更されません。")
                 l_ed = st.data_editor(
-                    df_act[['印刷対象', '商品名', '状態_PSA', '重量', '個別メモ', 'ID']], 
+                    df_act[['印刷対象', '印字用商品名', '状態_PSA', '重量', '個別メモ', 'ID']], 
                     hide_index=True, use_container_width=True, 
-                    column_config={"印刷対象": st.column_config.CheckboxColumn("印刷", width="small"), "商品名": st.column_config.TextColumn("商品名", disabled=True), "状態_PSA": st.column_config.TextColumn("状態", disabled=True, width="small"), "重量": st.column_config.TextColumn("重量(g)"), "個別メモ": st.column_config.TextColumn("ラベル印字メモ (2行まで)"), "ID": None}
+                    column_config={
+                        "印刷対象": st.column_config.CheckboxColumn("印刷", width="small"), 
+                        "印字用商品名": st.column_config.TextColumn("ラベル印字名 (編集可)"), 
+                        "状態_PSA": st.column_config.TextColumn("状態", disabled=True, width="small"), 
+                        "重量": st.column_config.TextColumn("重量(g)"), 
+                        "個別メモ": st.column_config.TextColumn("ラベル印字メモ (2行まで)"), 
+                        "ID": None
+                    }
                 )
                 if st.button("💾 重量・メモを保存", type="primary"):
                     df_s = load_data()
@@ -960,7 +977,15 @@ elif menu == "🖨️ 個別管理・ラベル":
                 start_pos = st.number_input("📌 シールの印刷開始位置 (1〜24番目)", min_value=1, max_value=24, value=1)
                 sel_p = l_ed[l_ed['印刷対象'] == True]
                 if not sel_p.empty:
-                    items = [df_act[df_act['ID'] == r['ID']].iloc[0].to_dict() for _, r in sel_p.iterrows()]
+                    items = []
+                    for _, r in sel_p.iterrows():
+                        item_dict = df_act[df_act['ID'] == r['ID']].iloc[0].to_dict()
+                        # ▼ 短くした名前（または手動で編集した名前）を適用
+                        item_dict['商品名'] = r['印字用商品名']
+                        item_dict['個別メモ'] = r['個別メモ']
+                        item_dict['重量'] = r['重量']
+                        items.append(item_dict)
+                        
                     html_data = generate_label_html(items, start_pos).encode('utf-8')
                     st.download_button(label=f"📄 {len(items)}枚のラベルHTMLをダウンロード", data=html_data, file_name="labels.html", mime="text/html", type="primary")
                 else: st.button("📄 ラベルHTMLをダウンロード", disabled=True, help="上のリストで「印刷」にチェックを入れてください")
