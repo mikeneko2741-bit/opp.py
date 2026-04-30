@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.64 - ラベル印刷開始位置バグ修正・UI強化版)
+# ⚙️ 設定・定数 (v5.65 - 原価再計算バグ修正版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -552,10 +552,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.64)
+# 🖥️ アプリ画面 (v5.65)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.64")
+st.title("🎴 ぽっけぇ～道 管理システム v5.65")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -801,7 +801,7 @@ elif menu == "📊 在庫・PSA管理":
                     else:
                         cam_res = _scanner(scanned_ids=existing_cart_ids, valid_ids=list(active_ids.values()), key="c_s")
                         if cam_res and isinstance(cam_res, dict) and cam_res['ts'] != st.session_state['app']['l_c_ts_s']: st.session_state['app']['l_c_ts_s'], target_sell_id = cam_res['ts'], cam_res['id']
-                    manual_sell = st.selectbox("手手動選択", options=[""] + list(active_ids.keys()), index=0)
+                    manual_sell = st.selectbox("手動選択", options=[""] + list(active_ids.keys()), index=0)
                     if manual_sell != "": target_sell_id = active_ids[manual_sell]
                     if target_sell_id and target_sell_id in active_ids.values() and target_sell_id not in existing_cart_ids:
                         trow = df_active[df_active['ID'] == target_sell_id].iloc[0]; st.session_state['app']['sell_cart'].append({'削除': False, 'id': target_sell_id, 'name': trow['商品名'], 'pack': trow['収録パック'], 'cond': trow['状態_PSA'], 'cost': int(trow['原価']), 'sell_price': (int(trow['参考相場']) if int(trow['参考相場']) > 0 else int(trow['原価'])), 'qty': 1, 'max_qty': int(trow['在庫数'])}); st.toast(f"✅ 追加: {trow['商品名']}"); st.rerun()
@@ -913,19 +913,15 @@ elif menu == "📊 在庫・PSA管理":
                                 progress_bar.progress((i + 1) / len(batch)); time.sleep(1.0) 
                             df_maint = save_data(df_maint); st.session_state['app']['relay_update_groups'] = pending_groups[UPDATE_BATCH_SIZE:]; st.rerun() 
                             
-                    if st.button("🚀 相場の一括更新を開始する (全自動)", use_container_width=True, disabled=st.session_state['app']['is_updating']):
-                        with st.spinner("データの生存確認中..."): verify_df = load_data()
-                        if verify_df is None: st.error("🚨 通信不安定")
-                        elif verify_df.empty: st.warning("在庫なし")
-                        else:
-                            send_discord_alert("🔍 **【相場チェック開始】** ぽっけぇ〜道 管理システムが全自動更新を開始しました。")
-                            active_targets = verify_df[(verify_df['相場更新'] == True) & (verify_df['ステータス'] != '売却済み') & (~verify_df['スニダンURL'].astype(str).str.startswith('http'))]
-                            if not active_targets.empty: 
-                                unique_groups = active_targets[['商品名', '収録パック', '種類', '状態_PSA']].drop_duplicates().to_dict('records')
-                                st.session_state['app']['relay_update_groups'] = unique_groups; st.session_state['app']['is_updating'] = True; st.session_state['app']['changes_detected'] = False; st.session_state['app']['base_prices'] = {}; st.rerun()
-                            else: st.info("更新対象なし（ロボット管轄以外のカードはありません）")
-                
-                st.button("🚨 原価再計算", on_click=recalculate_moving_average_costs)
+                    # ▼ 修正：計算した結果を「受け取って保存する」処理に書き換え
+                    if st.button("🚨 原価再計算", use_container_width=True):
+                        with st.spinner("移動平均法で全在庫の原価を再計算しています..."):
+                            updated_df = recalculate_moving_average_costs()
+                            if updated_df is not None:
+                                save_data(updated_df)
+                                st.success("✅ 原価の再計算と保存が完了しました！")
+                                time.sleep(1.5)
+                                st.rerun()
 
 # =========================================================
 # 🖨️ 第3フェーズ：個別管理・ラベル (🌟v5.64 バグ修正・UI強化版🌟)
@@ -979,7 +975,6 @@ elif menu == "🖨️ 個別管理・ラベル":
                 st.markdown("##### 🖨️ 2. ラベル用紙への印刷 (A4・24面)")
                 st.caption("💡 使いかけのシール用紙を使う場合は、以下のスライダーで「何番目から印刷するか」を指定してください。")
                 
-                # ▼ 修正：確実に「整数」として扱うためのブロックと、目立つスライダーUIへの変更
                 start_pos = int(st.slider("📌 シールの印刷開始位置 (1〜24番目)", min_value=1, max_value=24, value=1))
                 
                 sel_p = l_ed[l_ed['印刷対象'] == True]
