@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v11.5 ちょうどいいエラーリカバリー＆緊急アラート搭載)
+# ⚙️ 設定エリア (v11.6 確実なDiscord通知リカバリー機能搭載)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05        # 3万円未満の商品：前回から「5%」以上の変動で通知
 HIGH_PRICE_THRESHOLD = 30000        # 高額商品の基準（3万円）
@@ -20,7 +20,7 @@ HIGH_PRICE_FLUCTUATION = 1000       # 3万円以上の商品：前回から「1,
 BASE_PRICE_PROXIMITY_ALERT = 0.90   # スニダン相場がBASE価格の「90%」以上で警告通知
 BASE_PRICE_PROXIMITY_HIDE = 0.95    # スニダン相場がBASE価格の「95%」以上で緊急通知 ＆ 自動非表示
 HISTORY_HOURS = 24
-MAX_RETRIES = 3                     # スニダンとBASEの通信エラー時の最大再試行回数（軽傷の自己修復）
+MAX_RETRIES = 3                     # スニダン・BASE・Discord通信エラー時の最大再試行回数
 CONSECUTIVE_FAILURES_LIMIT = 5      # スニダン連続取得失敗によるBAN判定の閾値
 SPREADSHEET_NAME = "ぽっけぇ〜道_システムv3"
 JSON_KEY_FILE = "secrets.json"
@@ -35,11 +35,21 @@ API_KEYS = load_api_keys()
 DISCORD_WEBHOOK_URL = API_KEYS.get("DISCORD_WEBHOOK_URL", "")
 
 def send_discord(message):
-    if not DISCORD_WEBHOOK_URL: return
+    # 💡 修正：通知がエラーで消えないよう、最大3回まで再挑戦する
+    if not DISCORD_WEBHOOK_URL: return False
     data = {"content": message}
     req = urllib.request.Request(DISCORD_WEBHOOK_URL, json.dumps(data).encode(), {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
-    try: urllib.request.urlopen(req, timeout=5)
-    except: pass
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            return True
+        except Exception as e:
+            print(f"  ⚠️ Discord通知エラー (試行 {attempt+1}/{MAX_RETRIES}): {e}")
+            time.sleep(2) # 2秒待ってから再送信
+            
+    print("  ❌ 最終的にDiscordへの通知に失敗しました。")
+    return False
 
 def refresh_base_token(ws_set, client_id, client_secret, refresh_token):
     url = "https://api.thebase.in/1/oauth/token"
@@ -83,7 +93,6 @@ def get_base_items_info(access_token):
     return base_info
 
 def hide_base_item(access_token, item_id):
-    # 💡 軽傷リカバリー：エラーが起きても最大3回まで自力で再挑戦する
     url = "https://api.thebase.in/1/items/edit"
     params = {"item_id": item_id, "visible": 0}
     req = urllib.request.Request(url, data=urlencode(params).encode(), method="POST")
@@ -95,9 +104,8 @@ def hide_base_item(access_token, item_id):
                 return True
         except Exception as e:
             print(f"  ⚠️ BASE APIエラー (非表示化失敗 - 試行 {attempt+1}/{MAX_RETRIES}): {e}")
-            time.sleep(3) # 3秒待ってから再挑戦
+            time.sleep(3)
     
-    # 3回やってもダメだった場合は完全に失敗とみなす
     return False
 
 def parse_snkrdunk_date(date_str, now):
@@ -123,8 +131,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.5 起動...")
-    print("🚀 [ちょうどいいエラーリカバリー＆緊急アラート搭載]")
+    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.6 起動...")
+    print("🚀 [確実なDiscord通知リカバリー機能搭載]")
     print("===========================================")
     
     try:
@@ -181,7 +189,7 @@ def run_robot():
 
         log_records_to_append = []
         update_cells = []
-        consecutive_failures = 0 # BAN検知用のカウンター
+        consecutive_failures = 0
 
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -202,7 +210,6 @@ def run_robot():
                     print(f"\n[{i+1}/{len(targets)}] ➡️ 調査({t['mode']}): {t['name']}")
                     
                     list_locator = None
-                    # 💡 軽傷リカバリー：スニダン取得も最大3回まで再挑戦
                     for attempt in range(MAX_RETRIES):
                         try:
                             page.goto(t['url'], timeout=45000, wait_until="domcontentloaded")
@@ -221,16 +228,15 @@ def run_robot():
                                 print(f"  ❌ 最終的に取得失敗 → スキップします")
 
                     if not list_locator:
-                        # 🚨 致命傷②：連続アクセス失敗によるBAN検知
                         consecutive_failures += 1
                         if consecutive_failures >= CONSECUTIVE_FAILURES_LIMIT:
                             msg = "🚨 @everyone 【緊急停止】スニダンからアクセス拒否(BAN)された可能性があります。安全のためBOTを強制終了します。"
                             print(f"\n{msg}")
                             send_discord(msg)
-                            break # 全体のループを抜けて強制終了
+                            break
                         continue
                     else:
-                        consecutive_failures = 0 # 成功したらカウンターをリセット
+                        consecutive_failures = 0
 
                     all_h = []
                     row_count = list_locator.locator('li').count()
@@ -307,7 +313,6 @@ def run_robot():
                             if success:
                                 msg = f"🚨 **【緊急停止・自動非表示化 完了】** {t['name']}\nスニダン相場(¥{current_val:,})がBASE価格(¥{t['base_price']:,})の95%以上に達したため、**BASEでの出品を自動的に「非公開」に変更して保護しました。**\n🔗 {t['url']}"
                             else:
-                                # 🚨 致命傷①：BASE防衛失敗による緊急メンション
                                 msg = f"🚨 @everyone **【致命的エラー・自動非表示化 失敗】** {t['name']}\n相場が95%以上に達しましたが、BASEの通信エラーにより商品の取り下げに失敗しました！\n**至急、手動でBASEを非公開にしてください！**\n🔗 {t['url']}"
                             send_discord(msg)
                             
