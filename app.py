@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.65 - 原価再計算バグ修正版)
+# ⚙️ 設定・定数 (v5.66 - BASE連携 自動リフレッシュ機能搭載版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -200,6 +200,30 @@ def save_system_setting(key, value):
         ws_set.append_row([key, value])
     except Exception as e:
         st.error(f"❌ 設定保存エラー: {e}")
+
+# 💡 ▼ 追加：BASE APIトークン自動更新機能
+def refresh_base_token(client_id, client_secret, refresh_token):
+    url = "https://api.thebase.in/1/oauth/token"
+    data = {
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token
+    }
+    try:
+        res = requests.post(url, data=data, timeout=10)
+        if res.status_code == 200:
+            tokens = res.json()
+            new_access = tokens.get('access_token')
+            new_refresh = tokens.get('refresh_token')
+            if new_access:
+                save_system_setting('BASE_ACCESS_TOKEN', new_access)
+                if new_refresh:
+                    save_system_setting('BASE_REFRESH_TOKEN', new_refresh)
+                return new_access
+    except Exception as e:
+        pass
+    return None
 
 def get_base_items(access_token):
     url = "https://api.thebase.in/1/items"
@@ -552,10 +576,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.65)
+# 🖥️ アプリ画面 (v5.66)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.65")
+st.title("🎴 ぽっけぇ～道 管理システム v5.66")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -882,12 +906,20 @@ elif menu == "📊 在庫・PSA管理":
                             progress_bar = st.progress(0); df_maint = load_data()
                             if df_maint is None: st.error("🚨 API制限検知"); st.session_state['app']['is_updating'] = False; st.rerun()
                             base_dict = st.session_state['app'].get('base_prices', {})
-                            if not base_dict and settings.get('BASE_ACCESS_TOKEN'):
-                                base_items = get_base_items(settings['BASE_ACCESS_TOKEN'])
-                                for item in base_items:
-                                    ident = str(item.get('identifier', '')).strip()
-                                    if ident: base_dict[ident] = int(item.get('price', 0))
-                                st.session_state['app']['base_prices'] = base_dict
+                            
+                            # 💡 ▼ 追加：価格データを取得する直前に、必要に応じてBASEトークンを自動リフレッシュ
+                            if not base_dict:
+                                actual_token = settings.get('BASE_ACCESS_TOKEN')
+                                if settings.get('CLIENT_ID') and settings.get('BASE_REFRESH_TOKEN'):
+                                    refreshed = refresh_base_token(settings['CLIENT_ID'], settings.get('CLIENT_SECRET', ''), settings['BASE_REFRESH_TOKEN'])
+                                    if refreshed: actual_token = refreshed
+                                
+                                if actual_token:
+                                    base_items = get_base_items(actual_token)
+                                    for item in base_items:
+                                        ident = str(item.get('identifier', '')).strip()
+                                        if ident: base_dict[ident] = int(item.get('price', 0))
+                                    st.session_state['app']['base_prices'] = base_dict
 
                             for i, grp in enumerate(batch):
                                 o_n, o_p, i_t, o_c = grp['商品名'], grp['収録パック'], grp['種類'], grp['状態_PSA']
@@ -913,7 +945,18 @@ elif menu == "📊 在庫・PSA管理":
                                 progress_bar.progress((i + 1) / len(batch)); time.sleep(1.0) 
                             df_maint = save_data(df_maint); st.session_state['app']['relay_update_groups'] = pending_groups[UPDATE_BATCH_SIZE:]; st.rerun() 
                             
-                    # ▼ 修正：計算した結果を「受け取って保存する」処理に書き換え
+                    if st.button("🚀 相場の一括更新を開始する (全自動)", use_container_width=True, disabled=st.session_state['app']['is_updating']):
+                        with st.spinner("データの生存確認中..."): verify_df = load_data()
+                        if verify_df is None: st.error("🚨 通信不安定")
+                        elif verify_df.empty: st.warning("在庫なし")
+                        else:
+                            send_discord_alert("🔍 **【相場チェック開始】** ぽっけぇ〜道 管理システムが全自動更新を開始しました。")
+                            active_targets = verify_df[(verify_df['相場更新'] == True) & (verify_df['ステータス'] != '売却済み') & (~verify_df['スニダンURL'].astype(str).str.startswith('http'))]
+                            if not active_targets.empty: 
+                                unique_groups = active_targets[['商品名', '収録パック', '種類', '状態_PSA']].drop_duplicates().to_dict('records')
+                                st.session_state['app']['relay_update_groups'] = unique_groups; st.session_state['app']['is_updating'] = True; st.session_state['app']['changes_detected'] = False; st.session_state['app']['base_prices'] = {}; st.rerun()
+                            else: st.info("更新対象なし（ロボット管轄以外のカードはありません）")
+                
                     if st.button("🚨 原価再計算", use_container_width=True):
                         with st.spinner("移動平均法で全在庫の原価を再計算しています..."):
                             updated_df = recalculate_moving_average_costs()
