@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.63 - ラベルリスト最新仕入順ソート版)
+# ⚙️ 設定・定数 (v5.64 - ラベル印刷開始位置バグ修正・UI強化版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -438,7 +438,7 @@ def encrypt_cost(cost):
 
 def generate_label_html(items, start_pos=1):
     html = """<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>ぽっけぇ〜道 管理ラベル</title><style>@media print { @page { margin: 0; size: A4; } body { margin: 0; } } body { font-family: sans-serif; margin: 0; padding: 0; background: #fff; } .page { width: 210mm; min-height: 297mm; padding: 12.9mm 6mm; margin: 0 auto; box-sizing: border-box; display: grid; grid-template-columns: repeat(3, 66mm); grid-auto-rows: 33.9mm; gap: 0; page-break-after: always; } .label { width: 66mm; height: 33.9mm; padding: 3mm; box-sizing: border-box; display: flex; align-items: center; overflow: hidden; border: 1px dashed #eee; } .empty-label { width: 66mm; height: 33.9mm; padding: 3mm; box-sizing: border-box; border: 1px dashed transparent; } .qr-code { width: 20mm; height: 20mm; flex-shrink: 0; } .details { margin-left: 3mm; font-size: 8pt; line-height: 1.2; width: calc(100% - 23mm); overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; height: 100%; } .id { font-size: 10pt; font-weight: bold; margin-bottom: 2px; } .name { font-weight: bold; font-size: 9pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; } .memo { font-size: 9pt; font-weight: bold; color: #333; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; flex-grow: 1; margin-bottom: 2px; } .bottom-row { display: flex; justify-content: space-between; align-items: flex-end; font-size: 7pt; color: #333; margin-top: auto; } .enc-cost { font-weight: bold; }</style><script>window.onload = function() { window.print(); }</script></head><body><div class="page">"""
-    for _ in range(start_pos - 1): html += '<div class="empty-label"></div>'
+    for _ in range(int(start_pos) - 1): html += '<div class="empty-label"></div>'
     for item in items:
         enc_cost, weight, memo = encrypt_cost(item.get('原価', 0)), (f" / {item.get('重量', '')}g" if item.get('重量') else ""), item.get('個別メモ', '')
         html += f"""<div class="label"><img class="qr-code" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={item['ID']}"><div class="details"><div class="id">{item['ID']}</div><div class="name">{item['商品名']}</div><div class="memo">{memo}</div><div class="bottom-row"><span>{item['状態_PSA']}{weight}</span><span class="enc-cost">{enc_cost}</span></div></div></div>"""
@@ -552,10 +552,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.63)
+# 🖥️ アプリ画面 (v5.64)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.63")
+st.title("🎴 ぽっけぇ～道 管理システム v5.64")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -801,7 +801,7 @@ elif menu == "📊 在庫・PSA管理":
                     else:
                         cam_res = _scanner(scanned_ids=existing_cart_ids, valid_ids=list(active_ids.values()), key="c_s")
                         if cam_res and isinstance(cam_res, dict) and cam_res['ts'] != st.session_state['app']['l_c_ts_s']: st.session_state['app']['l_c_ts_s'], target_sell_id = cam_res['ts'], cam_res['id']
-                    manual_sell = st.selectbox("手動選択", options=[""] + list(active_ids.keys()), index=0)
+                    manual_sell = st.selectbox("手手動選択", options=[""] + list(active_ids.keys()), index=0)
                     if manual_sell != "": target_sell_id = active_ids[manual_sell]
                     if target_sell_id and target_sell_id in active_ids.values() and target_sell_id not in existing_cart_ids:
                         trow = df_active[df_active['ID'] == target_sell_id].iloc[0]; st.session_state['app']['sell_cart'].append({'削除': False, 'id': target_sell_id, 'name': trow['商品名'], 'pack': trow['収録パック'], 'cond': trow['状態_PSA'], 'cost': int(trow['原価']), 'sell_price': (int(trow['参考相場']) if int(trow['参考相場']) > 0 else int(trow['原価'])), 'qty': 1, 'max_qty': int(trow['在庫数'])}); st.toast(f"✅ 追加: {trow['商品名']}"); st.rerun()
@@ -928,7 +928,7 @@ elif menu == "📊 在庫・PSA管理":
                 st.button("🚨 原価再計算", on_click=recalculate_moving_average_costs)
 
 # =========================================================
-# 🖨️ 第3フェーズ：個別管理・ラベル (🌟v5.63で改修・最適化🌟)
+# 🖨️ 第3フェーズ：個別管理・ラベル (🌟v5.64 バグ修正・UI強化版🌟)
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -937,7 +937,6 @@ elif menu == "🖨️ 個別管理・ラベル":
         if not df.empty:
             df_act = df[(df['ステータス'] == '在庫あり') & (df['在庫数'] == 1)].copy()
             
-            # ▼ 追加：スプレッドシートの下（新しく追加されたもの）から順に表示するように並び替え
             df_act = df_act.iloc[::-1]
             
             search_l = st.text_input("🔍 商品名で検索", key="sl")
@@ -975,9 +974,14 @@ elif menu == "🖨️ 個別管理・ラベル":
                             df_s.loc[df_s['ID'] == r['ID'], '個別メモ'] = r['個別メモ']
                         df_s = save_data(df_s)
                         st.success("保存完了！最新の状態がシールに反映されます。"); st.rerun()
+                
                 st.divider()
                 st.markdown("##### 🖨️ 2. ラベル用紙への印刷 (A4・24面)")
-                start_pos = st.number_input("📌 シールの印刷開始位置 (1〜24番目)", min_value=1, max_value=24, value=1)
+                st.caption("💡 使いかけのシール用紙を使う場合は、以下のスライダーで「何番目から印刷するか」を指定してください。")
+                
+                # ▼ 修正：確実に「整数」として扱うためのブロックと、目立つスライダーUIへの変更
+                start_pos = int(st.slider("📌 シールの印刷開始位置 (1〜24番目)", min_value=1, max_value=24, value=1))
+                
                 sel_p = l_ed[l_ed['印刷対象'] == True]
                 if not sel_p.empty:
                     items = []
