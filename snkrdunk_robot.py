@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v11.6 確実なDiscord通知リカバリー機能搭載)
+# ⚙️ 設定エリア (v11.7 鉄壁のBASE非表示・API弾かれ対策版)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05        # 3万円未満の商品：前回から「5%」以上の変動で通知
 HIGH_PRICE_THRESHOLD = 30000        # 高額商品の基準（3万円）
@@ -35,7 +35,6 @@ API_KEYS = load_api_keys()
 DISCORD_WEBHOOK_URL = API_KEYS.get("DISCORD_WEBHOOK_URL", "")
 
 def send_discord(message):
-    # 💡 修正：通知がエラーで消えないよう、最大3回まで再挑戦する
     if not DISCORD_WEBHOOK_URL: return False
     data = {"content": message}
     req = urllib.request.Request(DISCORD_WEBHOOK_URL, json.dumps(data).encode(), {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
@@ -83,18 +82,28 @@ def get_base_items_info(access_token):
                 for item in items:
                     ident = item.get("identifier")
                     if ident: 
+                        # 💡 修正：非表示化に必要な「商品名」や「在庫数」も一緒に記憶しておく
                         base_info[ident] = {
                             "price": item.get("price", 0),
-                            "item_id": item.get("item_id")
+                            "item_id": item.get("item_id"),
+                            "title": item.get("title", ""),
+                            "stock": item.get("stock", 0)
                         }
                 if len(items) < 100: break
                 offset += 100
         except: break
     return base_info
 
-def hide_base_item(access_token, item_id):
+def hide_base_item(access_token, item_id, title, price, stock):
     url = "https://api.thebase.in/1/items/edit"
-    params = {"item_id": item_id, "visible": 0}
+    # 💡 修正：必須項目（title, price, stock）を全て送ることでAPIの仕様変更（エラー弾き）に備える
+    params = {
+        "item_id": item_id, 
+        "visible": 0,
+        "title": title,
+        "price": price,
+        "stock": stock
+    }
     req = urllib.request.Request(url, data=urlencode(params).encode(), method="POST")
     req.add_header("Authorization", f"Bearer {access_token}")
     
@@ -131,8 +140,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ〜道 総合監視ロボ v11.6 起動...")
-    print("🚀 [確実なDiscord通知リカバリー機能搭載]")
+    print("🤖 ぽっけぇ～道 総合監視ロボ v11.7 起動...")
+    print("🚀 [鉄壁のBASE非表示・API弾かれ対策版]")
     print("===========================================")
     
     try:
@@ -177,6 +186,8 @@ def run_robot():
                     "pack": str(row.get('収録パック')), "url": url, "mode": mode,
                     "base_price": int(b_item.get("price", 0)),
                     "base_item_id": b_item.get("item_id"),
+                    "base_title": b_item.get("title", ""),
+                    "base_stock": b_item.get("stock", 0),
                     "old_price": old_price
                 })
 
@@ -309,7 +320,8 @@ def run_robot():
                         
                         if ratio >= BASE_PRICE_PROXIMITY_HIDE:
                             print(f"  🚨 緊急停止: スニダン相場がBASE価格の95%に達しました。自動非表示を実行します。")
-                            success = hide_base_item(token, t['base_item_id'])
+                            # 💡 修正：名前や在庫情報も一緒に渡して完璧な命令を作成
+                            success = hide_base_item(token, t['base_item_id'], t['base_title'], t['base_price'], t['base_stock'])
                             if success:
                                 msg = f"🚨 **【緊急停止・自動非表示化 完了】** {t['name']}\nスニダン相場(¥{current_val:,})がBASE価格(¥{t['base_price']:,})の95%以上に達したため、**BASEでの出品を自動的に「非公開」に変更して保護しました。**\n🔗 {t['url']}"
                             else:
