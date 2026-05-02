@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.66 - BASE連携 自動リフレッシュ機能搭載版)
+# ⚙️ 設定・定数 (v5.67 - 編集タブ 論理削除機能搭載版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -201,7 +201,6 @@ def save_system_setting(key, value):
     except Exception as e:
         st.error(f"❌ 設定保存エラー: {e}")
 
-# 💡 ▼ 追加：BASE APIトークン自動更新機能
 def refresh_base_token(client_id, client_secret, refresh_token):
     url = "https://api.thebase.in/1/oauth/token"
     data = {
@@ -576,10 +575,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.66)
+# 🖥️ アプリ画面 (v5.67)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.66")
+st.title("🎴 ぽっけぇ～道 管理システム v5.67")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -706,7 +705,8 @@ if menu == "📦 スピード仕入・解体":
         st.subheader("🔨 まとまっている商品（BOX等）の解体")
         df_inv = load_data()
         if df_inv is not None and not df_inv.empty:
-            df_breakable = df_inv[(df_inv['在庫数'] > 0) & (df_inv['ステータス'] != '売却済み')]
+            # 💡 修正：「削除済み」のデータは表示しない
+            df_breakable = df_inv[(df_inv['在庫数'] > 0) & (~df_inv['ステータス'].isin(['売却済み', '削除済み']))]
             break_opts = {f"[{r['ID']}] {r['商品名']} (残:{r['在庫数']} / 原価:¥{r['原価']})": r['ID'] for _, r in df_breakable.iterrows()}
             sel_b = st.selectbox("解体する元の商品を選択", options=[""] + list(break_opts.keys()))
             
@@ -779,7 +779,8 @@ elif menu == "📊 在庫・PSA管理":
     if df is not None:
         if df.empty: st.info("在庫がありません")
         else:
-            df_active = df[df['ステータス'] != '売却済み'].copy()
+            # 💡 修正：「削除済み」のデータは表示しない
+            df_active = df[~df['ステータス'].isin(['売却済み', '削除済み'])].copy()
             tab_singles, tab_box, tab_summary, tab_psa, tab_sell, tab_edit, tab_maint = st.tabs(["🃏 シングル", "📦 BOX・素材", "📋 種類別サマリー", "💎 PSA管理", "🛒 売却レジ", "✏️ 編集", "🛠️ メンテ"])
             
             with tab_singles:
@@ -858,15 +859,19 @@ elif menu == "📊 在庫・PSA管理":
             
             with tab_edit:
                 st.info("⚠️ ロボット監視用のスニダンURLはここにコピペしてください。")
-                df_edit = df.copy(); df_edit['削除'] = False
+                # 💡 修正：「削除済み」のデータは表示しない。かつ、チェックを入れたら論理削除する。
+                df_edit = df[df['ステータス'] != '削除済み'].copy(); df_edit['削除'] = False
                 ed = st.data_editor(df_edit[['削除', 'ID', '商品名', '種類', '状態_PSA', '相場更新', '個別メモ', '在庫数', '原価', 'スニダンURL', 'BASE販売価格']], hide_index=True, use_container_width=True)
                 if st.button("💾 変更保存", type="primary"):
                     df_s = load_data()
                     if df_s is not None:
-                        df_s = df_s[df_s['ID'].isin(ed[~ed['削除']]['ID'].tolist())].copy()
                         for _, r in ed.iterrows():
-                            if not r['削除']:
-                                for col in ['商品名', '種類', '状態_PSA', '相場更新', '個別メモ', '在庫数', '原価', 'スニダンURL', 'BASE販売価格']: df_s.loc[df_s['ID'] == r['ID'], col] = r[col]
+                            if r['削除']:
+                                # 💡 修正：ステータスを「削除済み」に書き換えてゴミ箱に入れる（論理削除）
+                                df_s.loc[df_s['ID'] == r['ID'], 'ステータス'] = '削除済み'
+                            else:
+                                for col in ['商品名', '種類', '状態_PSA', '相場更新', '個別メモ', '在庫数', '原価', 'スニダンURL', 'BASE販売価格']: 
+                                    df_s.loc[df_s['ID'] == r['ID'], col] = r[col]
                         df_s = save_data(df_s); st.success("更新完了"); st.rerun()
             
             with tab_maint:
@@ -907,7 +912,6 @@ elif menu == "📊 在庫・PSA管理":
                             if df_maint is None: st.error("🚨 API制限検知"); st.session_state['app']['is_updating'] = False; st.rerun()
                             base_dict = st.session_state['app'].get('base_prices', {})
                             
-                            # 💡 ▼ 追加：価格データを取得する直前に、必要に応じてBASEトークンを自動リフレッシュ
                             if not base_dict:
                                 actual_token = settings.get('BASE_ACCESS_TOKEN')
                                 if settings.get('CLIENT_ID') and settings.get('BASE_REFRESH_TOKEN'):
@@ -951,7 +955,7 @@ elif menu == "📊 在庫・PSA管理":
                         elif verify_df.empty: st.warning("在庫なし")
                         else:
                             send_discord_alert("🔍 **【相場チェック開始】** ぽっけぇ〜道 管理システムが全自動更新を開始しました。")
-                            active_targets = verify_df[(verify_df['相場更新'] == True) & (verify_df['ステータス'] != '売却済み') & (~verify_df['スニダンURL'].astype(str).str.startswith('http'))]
+                            active_targets = verify_df[(verify_df['相場更新'] == True) & (~verify_df['ステータス'].isin(['売却済み', '削除済み'])) & (~verify_df['スニダンURL'].astype(str).str.startswith('http'))]
                             if not active_targets.empty: 
                                 unique_groups = active_targets[['商品名', '収録パック', '種類', '状態_PSA']].drop_duplicates().to_dict('records')
                                 st.session_state['app']['relay_update_groups'] = unique_groups; st.session_state['app']['is_updating'] = True; st.session_state['app']['changes_detected'] = False; st.session_state['app']['base_prices'] = {}; st.rerun()
@@ -967,7 +971,7 @@ elif menu == "📊 在庫・PSA管理":
                                 st.rerun()
 
 # =========================================================
-# 🖨️ 第3フェーズ：個別管理・ラベル (🌟v5.64 バグ修正・UI強化版🌟)
+# 🖨️ 第3フェーズ：個別管理・ラベル
 # =========================================================
 elif menu == "🖨️ 個別管理・ラベル":
     st.header("🖨️ 個別管理・A4ラベル印刷")
@@ -1081,7 +1085,8 @@ elif menu == "📖 帳簿・分析":
         t1, t2, t3, t4 = st.tabs(["📈 状況", "📒 売上", "📒 仕入", "📤 出力"])
         with t1:
             if not df_inv.empty: 
-                df_act = df_inv[df_inv['ステータス'] != '売却済み']
+                # 💡 修正：「削除済み」のデータは帳簿の状況からも除外
+                df_act = df_inv[~df_inv['ステータス'].isin(['売却済み', '削除済み'])]
                 c1, c2 = st.columns(2)
                 c1.metric("在庫原価", f"¥{(df_act['原価']*df_act['在庫数']).sum():,}")
                 c2.metric("見込み売上", f"¥{(df_act['参考相場']*df_act['在庫数']).sum():,}")
