@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.68 - API制限・キャッシュエラー完全対応版)
+# ⚙️ 設定・定数 (v5.69 - レジ高速化・無駄な通信ブロック版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -183,6 +183,8 @@ def check_and_init_sheets():
         st.error(f"❌ シート初期化エラー: {e}")
         return None, None, None, None, None
 
+# 💡 ▼ 修正：無駄な通信を省くため、設定情報も60秒間暗記させる
+@st.cache_data(ttl=60)
 def load_system_settings():
     _, _, _, _, ws_set = check_and_init_sheets()
     if not ws_set: return {}
@@ -202,6 +204,8 @@ def save_system_setting(key, value):
         ws_set.append_row([key, value])
     except Exception as e:
         pass
+    # 💡 修正：新しい設定を保存した瞬間に暗記をリセットする
+    load_system_settings.clear()
 
 def refresh_base_token(client_id, client_secret, refresh_token):
     url = "https://api.thebase.in/1/oauth/token"
@@ -240,6 +244,7 @@ def get_base_items(access_token):
             if len(fetched) < 100: break
             offset += 100
         except Exception as e:
+            st.error(f"❌ BASE API通信エラー: {e}")
             break
     return items
 
@@ -577,10 +582,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.68)
+# 🖥️ アプリ画面 (v5.69)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.68")
+st.title("🎴 ぽっけぇ～道 管理システム v5.69")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
