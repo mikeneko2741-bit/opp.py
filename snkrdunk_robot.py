@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 
 # =========================================================
-# ⚙️ 設定エリア (v11.7 鉄壁のBASE非表示・API弾かれ対策版)
+# ⚙️ 設定エリア (v11.8 スニダン新レイアウト・暗号化完全対応版)
 # =========================================================
 CHANGE_NOTIFY_PERCENT = 0.05        # 3万円未満の商品：前回から「5%」以上の変動で通知
 HIGH_PRICE_THRESHOLD = 30000        # 高額商品の基準（3万円）
@@ -82,7 +82,6 @@ def get_base_items_info(access_token):
                 for item in items:
                     ident = item.get("identifier")
                     if ident: 
-                        # 💡 修正：非表示化に必要な「商品名」や「在庫数」も一緒に記憶しておく
                         base_info[ident] = {
                             "price": item.get("price", 0),
                             "item_id": item.get("item_id"),
@@ -96,7 +95,6 @@ def get_base_items_info(access_token):
 
 def hide_base_item(access_token, item_id, title, price, stock):
     url = "https://api.thebase.in/1/items/edit"
-    # 💡 修正：必須項目（title, price, stock）を全て送ることでAPIの仕様変更（エラー弾き）に備える
     params = {
         "item_id": item_id, 
         "visible": 0,
@@ -140,8 +138,8 @@ def filter_abnormal_prices(prices):
 
 def run_robot():
     print("===========================================")
-    print("🤖 ぽっけぇ～道 総合監視ロボ v11.7 起動...")
-    print("🚀 [鉄壁のBASE非表示・API弾かれ対策版]")
+    print("🤖 ぽっけぇ～道 総合監視ロボ v11.8 起動...")
+    print("🚀 [スニダン新レイアウト・暗号化完全対応版]")
     print("===========================================")
     
     try:
@@ -228,7 +226,9 @@ def run_robot():
                             time.sleep(1)
                             page.evaluate("window.scrollBy(0, 800)")
                             time.sleep(2)
-                            list_locator = page.locator('ul.sales-history.item-list').first
+                            
+                            # 💡 修正：新旧両対応。暗号に依存せず「tradingHistory」または「sales-history」で探す
+                            list_locator = page.locator('div[class*="tradingHistory"] table tbody, ul.sales-history.item-list').first
                             list_locator.wait_for(state="attached", timeout=15000)
                             break
                         except:
@@ -250,14 +250,36 @@ def run_robot():
                         consecutive_failures = 0
 
                     all_h = []
-                    row_count = list_locator.locator('li').count()
+                    
+                    # 💡 修正：見つかった枠が新しい「表(TBODY)」か古い「リスト(UL)」かを自動判定
+                    tag_name = list_locator.evaluate("el => el.tagName").upper()
+                    if tag_name == "TBODY":
+                        row_locators = list_locator.locator('tr')
+                        is_new_layout = True
+                    else:
+                        row_locators = list_locator.locator('li')
+                        is_new_layout = False
+                        
+                    row_count = row_locators.count()
                     
                     for j in range(row_count):
-                        item = list_locator.locator('li').nth(j)
+                        item = row_locators.nth(j)
                         try:
-                            date_text = item.locator('.date').text_content().strip()
-                            size_text = item.locator('.size').text_content().strip()
-                            price_text = item.locator('.price').text_content().strip()
+                            if is_new_layout:
+                                # 新レイアウト（暗号無視の部分一致検索）
+                                date_text = item.locator('td[class*="soldAt"]').text_content().strip()
+                                
+                                # variant（状態）とcondition（枚数）を合体させる
+                                v_text = item.locator('td[class*="variant"]').text_content().strip() if item.locator('td[class*="variant"]').count() > 0 else ""
+                                c_text = item.locator('td[class*="condition"]').text_content().strip() if item.locator('td[class*="condition"]').count() > 0 else ""
+                                size_text = f"{v_text} {c_text}".strip()
+                                
+                                price_text = item.locator('td[class*="price"]').text_content().strip()
+                            else:
+                                # 旧レイアウト
+                                date_text = item.locator('.date').text_content().strip()
+                                size_text = item.locator('.size').text_content().strip()
+                                price_text = item.locator('.price').text_content().strip()
                         except:
                             continue
                         
@@ -320,7 +342,6 @@ def run_robot():
                         
                         if ratio >= BASE_PRICE_PROXIMITY_HIDE:
                             print(f"  🚨 緊急停止: スニダン相場がBASE価格の95%に達しました。自動非表示を実行します。")
-                            # 💡 修正：名前や在庫情報も一緒に渡して完璧な命令を作成
                             success = hide_base_item(token, t['base_item_id'], t['base_title'], t['base_price'], t['base_stock'])
                             if success:
                                 msg = f"🚨 **【緊急停止・自動非表示化 完了】** {t['name']}\nスニダン相場(¥{current_val:,})がBASE価格(¥{t['base_price']:,})の95%以上に達したため、**BASEでの出品を自動的に「非公開」に変更して保護しました。**\n🔗 {t['url']}"
