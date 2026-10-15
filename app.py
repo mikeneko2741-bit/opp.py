@@ -17,7 +17,7 @@ from gspread_dataframe import get_as_dataframe
 import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
-# ⚙️ 設定・定数 (v5.69 - レジ高速化・無駄な通信ブロック版)
+# ⚙️ 設定・定数 (v5.70 - スキャナー修正・カート削除・通信75%削減版)
 # ---------------------------------------------------------
 JSON_KEY_FILE = 'secrets.json'
 SPREADSHEET_NAME = 'ぽっけぇ〜道_システムv3'
@@ -121,7 +121,7 @@ def get_camera_qr_scanner():
 _scanner = get_camera_qr_scanner()
 
 # ---------------------------------------------------------
-# 🛡️ Google API接続エンジン
+# 🛡️ Google API接続エンジン (通信75%削減・高速キャッシュ版)
 # ---------------------------------------------------------
 @st.cache_resource
 def get_gspread_client():
@@ -141,49 +141,55 @@ def get_gspread_client():
         st.error(f"❌ 認証エラー (Google API): {e}")
         return None
 
-def get_spreadsheet():
+# 💡 改修③：シートの存在確認と見出しチェックを1時間暗記させ、無駄な通信を75%カット
+@st.cache_resource(ttl=3600)
+def get_cached_worksheets():
     client = get_gspread_client()
     if not client: return None
-    try:
-        return client.open(SPREADSHEET_NAME)
-    except gspread.exceptions.APIError:
-        st.warning("⚠️ Google API通信制限中です。少し時間をおいてください。")
-        return None
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"❌ エラー: スプレッドシート '{SPREADSHEET_NAME}' が見つかりません。名前が正しいか確認してください。")
-        return None
-    except Exception as e:
-        st.error(f"❌ スプレッドシート取得エラー: {e}")
-        return None
+    sh = client.open(SPREADSHEET_NAME)
+    worksheets = sh.worksheets()
+    sheets = {ws.title: ws for ws in worksheets}
+    
+    def get_or_create(title, rows, cols, headers):
+        if title in sheets: return sheets[title]
+        ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
+        ws.append_row(headers)
+        return ws
+        
+    ws_inv = get_or_create(SHEET_INVENTORY, 1000, 18, ['ID', '商品名', '収録パック', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号', '相場更新', '重量', '個別メモ', '商品URL', 'スニダンURL', 'BASE販売価格'])
+    ws_pur = get_or_create(SHEET_PURCHASE, 1000, 14, ['ID', '仕入日', '仕入名目', '商品名', '収録パック', '種類', '状態_PSA', '数量', '単価', '小計', '仕入先', '備考', '登録日時'])
+    ws_sales = get_or_create(SHEET_SALES, 1000, 15, ['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
+    ws_cart = get_or_create(SHEET_CART, 1000, 3, ['SessionID', 'Timestamp', 'CartJSON'])
+    ws_set = get_or_create(SHEET_SETTINGS, 50, 2, ['Key', 'Value'])
+    
+    header = ws_inv.row_values(1)
+    if header:
+        required_cols = ['重量', '個別メモ', '商品URL', 'スニダンURL', 'BASE販売価格']
+        updates = []
+        for col in required_cols:
+            if col not in header:
+                header.append(col)
+                updates.append(gspread.Cell(row=1, col=len(header), value=col))
+        if updates: ws_inv.update_cells(updates)
+        
+    return ws_inv, ws_pur, ws_sales, ws_cart, ws_set
 
 def check_and_init_sheets():
-    sh = get_spreadsheet()
-    if not sh: return None, None, None, None, None
     try:
-        worksheets = sh.worksheets()
-        sheets = {ws.title: ws for ws in worksheets}
-        
-        def get_or_create(title, rows, cols, headers):
-            if title in sheets: return sheets[title]
-            ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
-            ws.append_row(headers)
-            return ws
-            
-        ws_inv = get_or_create(SHEET_INVENTORY, 1000, 18, ['ID', '商品名', '収録パック', '種類', '状態_PSA', '仕入日', '原価', '参考相場', '在庫数', '仕入元', 'ステータス', 'PSA番号', '相場更新', '重量', '個別メモ', '商品URL', 'スニダンURL', 'BASE販売価格'])
-        ws_pur = get_or_create(SHEET_PURCHASE, 1000, 14, ['ID', '仕入日', '仕入名目', '商品名', '収録パック', '種類', '状態_PSA', '数量', '単価', '小計', '仕入先', '備考', '登録日時'])
-        ws_sales = get_or_create(SHEET_SALES, 1000, 15, ['ID', '元の在庫ID', '売却日', '商品名', '収録パック', '状態_PSA', '売却数', '売上額', '手数料', '経費_送料', '純利益', '販路', '備考', '登録日時'])
-        ws_cart = get_or_create(SHEET_CART, 1000, 3, ['SessionID', 'Timestamp', 'CartJSON'])
-        ws_set = get_or_create(SHEET_SETTINGS, 50, 2, ['Key', 'Value'])
-        
-        return ws_inv, ws_pur, ws_sales, ws_cart, ws_set
+        res = get_cached_worksheets()
+        if not res: return None, None, None, None, None
+        return res
     except gspread.exceptions.APIError:
         st.warning("⚠️ Google API制限中です。少し時間をおいてください。")
         return None, None, None, None, None
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"❌ エラー: スプレッドシート '{SPREADSHEET_NAME}' が見つかりません。名前が正しいか確認してください。")
+        return None, None, None, None, None
     except Exception as e:
-        st.error(f"❌ シート初期化エラー: {e}")
+        get_cached_worksheets.clear()
+        st.error(f"❌ シート接続エラー: {e}")
         return None, None, None, None, None
 
-# 💡 ▼ 修正：無駄な通信を省くため、設定情報も60秒間暗記させる
 @st.cache_data(ttl=60)
 def load_system_settings():
     _, _, _, _, ws_set = check_and_init_sheets()
@@ -204,7 +210,6 @@ def save_system_setting(key, value):
         ws_set.append_row([key, value])
     except Exception as e:
         pass
-    # 💡 修正：新しい設定を保存した瞬間に暗記をリセットする
     load_system_settings.clear()
 
 def refresh_base_token(client_id, client_secret, refresh_token):
@@ -257,28 +262,23 @@ def clean_display_data(df, columns):
     return df
 
 # ---------------------------------------------------------
-# 🚨 データ読み込みエンジン (ボタン排除・制限対応版)
+# 🚨 データ読み込みエンジン (1回の通信で完結する超軽量版)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data():
     ws_inv, _, _, _, _ = check_and_init_sheets()
     if not ws_inv: return None
     try:
-        header = ws_inv.row_values(1)
-        if not header: return None
-        required_cols = ['重量', '個別メモ', '商品URL', 'スニダンURL', 'BASE販売価格']
-        updates = []
-        for col in required_cols:
-            if col not in header:
-                header.append(col)
-                updates.append(gspread.Cell(row=1, col=len(header), value=col))
-        if updates: ws_inv.update_cells(updates)
-        
         df = get_as_dataframe(ws_inv, evaluate_formulas=True)
         if 'ID' not in df.columns:
             st.error("❌ 在庫DBのA列に『ID』という見出しが見つかりません。")
             return None
             
+        required_cols = ['重量', '個別メモ', '商品URL', 'スニダンURL', 'BASE販売価格']
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = ''
+                
         df = df.dropna(subset=['ID']); df = df[df['ID'] != '']
         df = clean_display_data(df, ['PSA番号', '収録パック', '重量', '個別メモ', '商品URL', 'スニダンURL', 'BASE販売価格', '仕入元', 'ステータス', '状態_PSA'])
 
@@ -582,10 +582,10 @@ def filter_dataframe(df, search_text):
     return df[df['商品名'].str.lower().str.contains(search_lower, na=False) | df['収録パック'].str.lower().str.contains(search_lower, na=False)]
 
 # ---------------------------------------------------------
-# 🖥️ アプリ画面 (v5.69)
+# 🖥️ アプリ画面 (v5.70)
 # ---------------------------------------------------------
 st.set_page_config(page_title="ぽっけぇ～道 システム", layout="wide")
-st.title("🎴 ぽっけぇ～道 管理システム v5.69")
+st.title("🎴 ぽっけぇ～道 管理システム v5.70")
 
 if 'app' not in st.session_state:
     st.session_state['app'] = {
@@ -597,17 +597,18 @@ if 'app' not in st.session_state:
 
 if 'session_id' not in st.session_state: st.session_id = uuid.uuid4().hex
 
-if 'phys_scan_val_sell' not in st.session_state: st.session_state['phys_scan_val_sell'] = ""
+# 💡 改修①：物理スキャナーのキー名を p_v_s と p_o に完全統一
+if 'p_v_s' not in st.session_state: st.session_state['p_v_s'] = ""
 def cb_phys_sell():
-    if st.session_state['phys_scan_val_sell']:
-        st.session_state['app']['phys_scan_pend_sell'] = st.session_state['phys_scan_val_sell']
-        st.session_state['phys_scan_val_sell'] = ""
+    if st.session_state['p_v_s']:
+        st.session_state['app']['phys_scan_pend_sell'] = st.session_state['p_v_s'].strip()
+        st.session_state['p_v_s'] = ""
 
-if 'phys_scan_val_oripa' not in st.session_state: st.session_state['phys_scan_val_oripa'] = ""
+if 'p_o' not in st.session_state: st.session_state['p_o'] = ""
 def cb_phys_oripa():
-    if st.session_state['phys_scan_val_oripa']:
-        st.session_state['app']['phys_scan_pend_oripa'] = st.session_state['phys_scan_val_oripa']
-        st.session_state['phys_scan_val_oripa'] = ""
+    if st.session_state['p_o']:
+        st.session_state['app']['phys_scan_pend_oripa'] = st.session_state['p_o'].strip()
+        st.session_state['p_o'] = ""
 
 menu = st.sidebar.radio("【作業メニュー】", ["📦 スピード仕入・解体", "📊 在庫・PSA管理", "🖨️ 個別管理・ラベル", "🛍️ オリパ工場", "📖 帳簿・分析"])
 
@@ -671,13 +672,18 @@ if menu == "📦 スピード仕入・解体":
         with col_right:
             total_cart_qty = sum(item['qty'] for item in st.session_state['app']['cart'])
             st.subheader(f"② カートの中身と原価計算 (計 {total_cart_qty} 点)")
-            c_save, c_load = st.columns(2)
+            # 💡 改修②：カート操作ボタン（下書き保存・復元・空にする）
+            c_save, c_load, c_clear = st.columns(3)
             with c_save:
                 if st.button("💾 下書き保存", use_container_width=True): save_cart_draft(st.session_id, st.session_state['app']['cart']); st.success("保存完了")
             with c_load:
                 if st.button("📥 復元", use_container_width=True):
                     draft = load_cart_draft(st.session_id)
                     if draft: st.session_state['app']['cart'] = draft; st.rerun()
+            with c_clear:
+                if st.button("🗑️ 空にする", use_container_width=True):
+                    st.session_state['app']['cart'] = []; st.rerun()
+                    
             rk = st.session_state['app']['reset_key']
             with st.container(border=True):
                 total_paid, purchase_title, purchase_source, is_individual = st.number_input("支払総額", min_value=0, step=1000, key=f"tp_{rk}"), st.text_input("仕入名目", key=f"ti_{rk}"), st.selectbox("仕入先", ["店舗", "フリマ", "オンラインオリパ", "問屋", "自己所有", "その他"], key=f"so_{rk}"), st.checkbox("✅ 個別管理する（細胞分裂）", value=True)
@@ -689,12 +695,23 @@ if menu == "📦 スピード仕入・解体":
                     if 'unit_cost' not in item or total_paid != st.session_state['app'].get('prev_total_paid', 0): item['unit_cost'] = int((total_paid * ((item['qty'] * item['market_price']) / total_mkt)) / item['qty']) if total_mkt > 0 else 0
                     calc_cart.append({"削除": False, "ID": item['id'], "商品名": item['name'], "収録パック": item.get('pack', ''), "状態": item['cond'], "種類": item['type'], "数量": item['qty'], "原価": item['unit_cost'], "参考相場": item['market_price'], "相場更新": item['auto_update'], "商品URL": item.get('url', '')})
                 st.session_state['app']['prev_total_paid'] = total_paid
-                edited_cart = st.data_editor(pd.DataFrame(calc_cart), hide_index=True, key=f"cart_ed_{rk}", use_container_width=True, column_config={"相場更新": st.column_config.CheckboxColumn("相場更新")})
+                edited_cart = st.data_editor(pd.DataFrame(calc_cart), hide_index=True, key=f"cart_ed_{rk}", use_container_width=True, column_config={"削除": st.column_config.CheckboxColumn("削除", width="small"), "相場更新": st.column_config.CheckboxColumn("相場更新")})
+                
+                # 💡 改修②：チェックした項目をカートから除外するボタン
+                if edited_cart['削除'].any():
+                    if st.button("🗑️ チェックした項目をカートから外す", use_container_width=True):
+                        keep_ids = edited_cart[~edited_cart['削除']]['ID'].tolist()
+                        st.session_state['app']['cart'] = [item for item in st.session_state['app']['cart'] if item['id'] in keep_ids]
+                        st.session_state['app']['reset_key'] += 1
+                        st.rerun()
+                        
                 if st.button("✨ 一括登録 ✨", type="primary", use_container_width=True):
                     df_inv = load_data()
                     if df_inv is not None:
                         batch_id, p_date, new_rows, log_items = "B" + uuid.uuid4().hex[:8], datetime.now().strftime('%Y-%m-%d'), [], []
                         for _, row in edited_cart.iterrows():
+                            # 💡 改修②：万が一「削除」にチェックが入ったまま登録を押しても無視する安全装置
+                            if row['削除']: continue
                             qty, cost = int(row['数量']), int(row['原価']); log_items.append({'name': row['商品名'], 'pack': row['収録パック'], 'type': row['種類'], 'cond': row['状態'], 'qty': qty, 'unit_cost': cost, 'subtotal': qty * cost})
                             if row['種類'] == "サプライ": continue
                             if is_individual and row['種類'] not in ["素材・バルク", "その他"]:
@@ -770,7 +787,7 @@ if menu == "📦 スピード仕入・解体":
                                 recs = [{'ID': "S"+uuid.uuid4().hex[:8], '元の在庫ID': b_id, '売却日': datetime.now().strftime('%Y-%m-%d'), '商品名': parent_row['商品名'], '収録パック': parent_row['収録パック'], '状態_PSA': parent_row['状態_PSA'], '売却数': 1, '売上額': 0, '手数料': 0, '経費_送料': 0, '純利益': 0, '販路': 'システム：解体消費', '備考': '解体', '登録日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
                                 save_sales_data(pd.concat([df_sales_b, pd.DataFrame(recs)], ignore_index=True))
                                 
-                                new_rows_b, p_date = datetime.now().strftime('%Y-%m-%d'), []
+                                new_rows_b, p_date = [], datetime.now().strftime('%Y-%m-%d')
                                 for r in calc_break:
                                     orig_item = next(i for i in st.session_state['app']['dismantle_cart'] if i['id'] == r['ID'])
                                     for _ in range(r['数量']):
